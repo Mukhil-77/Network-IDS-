@@ -1,0 +1,48 @@
+"""
+Low-level email sending. Extracted here (Milestone 10) from what used to
+be inline smtplib code inside response_engine/notifications.py's send_email
+action - that action now delegates to this class instead of duplicating
+the SMTP logic, per this milestone's "reuse, don't duplicate" instruction.
+"""
+
+from __future__ import annotations
+
+import smtplib
+from email.message import EmailMessage
+
+from backend.core.config import get_settings
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class EmailService:
+    def send(self, to: str, subject: str, body: str) -> tuple[bool, str]:
+        """
+        Returns (success, message). Never raises - a notification failure
+        must never crash whatever triggered it (a response action, a test
+        button, etc.) - the caller decides what to do with a failure.
+        """
+        settings = get_settings()
+        if not settings.SMTP_HOST or not to:
+            return False, "SMTP not configured (SMTP_HOST unset) or no recipient given"
+
+        try:
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = settings.ALERT_EMAIL_FROM or settings.SMTP_USERNAME
+            msg["To"] = to
+            msg.set_content(body)
+
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                server.starttls()
+                if settings.SMTP_USERNAME:
+                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                server.send_message(msg)
+            return True, f"Email sent to {to}"
+        except Exception as exc:  # noqa: BLE001 - notification delivery must degrade gracefully, never raise
+            logger.warning("Email send failed: %s", exc)
+            return False, f"Email send failed: {exc}"
+
+
+email_service = EmailService()

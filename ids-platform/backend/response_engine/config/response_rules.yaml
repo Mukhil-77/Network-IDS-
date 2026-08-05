@@ -1,0 +1,23 @@
+# Response policy configuration - severity -> ordered list of actions.
+# Action names must match a registered handler (see response_registry.py).
+# Editable directly, or via GET/PUT /response-rules (which rewrites this
+# file so changes survive a restart).
+
+simulation_mode: true
+
+policies:
+  Critical:
+    - block_ip
+    - quarantine_host
+    - send_email
+    - send_telegram
+    - log_response
+  High:
+    - block_ip
+    - restart_service
+    - generate_incident
+  Medium:
+    - notify_analyst
+    - increase_monitoring
+  Low:
+    - log_response

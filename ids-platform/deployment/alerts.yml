@@ -1,0 +1,45 @@
+# Prometheus alert rules for the SOC platform
+# (matches the alert names documented in originalsetup.pdf).
+
+groups:
+  - name: soc-platform
+    rules:
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend is down"
+
+      - alert: HighThreatRate
+        expr: rate(alert_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High threat rate detected"
+
+      - alert: HighPredictionLatency
+        expr: histogram_quantile(0.95, rate(prediction_latency_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prediction latency above 500ms p95"
+
+      - alert: DatabaseConnectionHigh
+        expr: db_connections > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database connection pool near capacity"
+
+      - alert: HighCPUUsage
+        expr: 100 - avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host CPU usage above 90%"

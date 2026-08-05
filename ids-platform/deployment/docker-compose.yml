@@ -1,0 +1,140 @@
+version: "3.9"
+
+# AI-Powered SOC Platform - Docker Compose
+# Profile flags (from originalsetup.pdf):
+#   --profile with-cache   adds Redis
+#   --profile with-elk     adds the ELK logging stack (Elasticsearch, Logstash, Kibana, Filebeat)
+#   --profile monitoring   adds Prometheus + Grafana
+# Usage: docker compose --profile monitoring up -d --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-lenovo}
+      POSTGRES_DB: ${DB_NAME:-ids_soc}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ids_soc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: soc-redis
+    profiles: ["with-cache"]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deployment/backend.Dockerfile
+    container_name: soc-backend
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-lenovo}
+      DB_NAME: ${DB_NAME:-ids_soc}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-to-a-random-secret-key}
+      REDIS_HOST: redis
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deployment/frontend.Dockerfile
+    container_name: soc-frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+
+  prometheus:
+    build:
+      context: .
+      dockerfile: prometheus.Dockerfile
+    container_name: soc-prometheus
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - promdata:/prometheus
+
+  grafana:
+    build:
+      context: .
+      dockerfile: grafana.Dockerfile
+    container_name: soc-grafana
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafanadata:/var/lib/grafana
+
+  elasticsearch:
+    image: elasticsearch:8.12.0
+    container_name: soc-elasticsearch
+    profiles: ["with-elk"]
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+
+  logstash:
+    image: logstash:8.12.0
+    container_name: soc-logstash
+    profiles: ["with-elk"]
+    depends_on:
+      - elasticsearch
+    volumes:
+      - ./logging/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    ports:
+      - "5000:5000"
+      - "9600:9600"
+
+  kibana:
+    image: kibana:8.12.0
+    container_name: soc-kibana
+    profiles: ["with-elk"]
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+
+  filebeat:
+    image: filebeat:8.12.0
+    container_name: soc-filebeat
+    profiles: ["with-elk"]
+    depends_on:
+      - logstash
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./logging/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:

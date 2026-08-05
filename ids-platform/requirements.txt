@@ -1,0 +1,52 @@
+# Milestone 1 dependencies (dataset loading & preprocessing only).
+# Later milestones (feature engineering, training, FastAPI, etc.) will add
+# their own dependencies incrementally rather than front-loading everything.
+
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Milestone 2 dependencies (feature engineering, training, evaluation,
+# model persistence). Not front-loaded in Milestone 1 for the same reason
+# noted above.
+scikit-learn>=1.3.0
+imbalanced-learn>=0.11.0
+joblib>=1.3.0
+
+# Milestone 3 dependencies (prediction service request/response schemas).
+pydantic>=2.0.0
+
+# Milestone 4 dependencies (FastAPI backend).
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic-settings>=2.3.0
+httpx>=0.27.0  # required by FastAPI's TestClient, used in tests/test_api_*.py
+
+# Milestone 5 dependencies (live packet capture).
+scapy>=2.5.0
+# pyshark is an OPTIONAL alternate capture backend (see backend/packet_capture/capture.py).
+# It additionally requires the `tshark` binary on PATH, so it is not installed by default -
+# uncomment if you want the PyShark backend available:
+# pyshark>=0.6
+
+# Milestone 6 dependencies (database + websocket SOC backend).
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0  # PostgreSQL driver; not needed for the test suite, which uses SQLite
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+
+# Milestone 8 dependencies (response engine).
+pyyaml>=6.0.0
+requests>=2.31.0
+
+# OS-level telemetry for /system/stats (CPU/memory/disk/network/GPU).
+psutil>=5.9.0
+
+# Milestone 9 dependencies (authentication).
+pyjwt>=2.7.0
+bcrypt>=4.0.0
+email-validator>=2.0.0
+
+# Milestone 10 dependencies (PDF report generation).
+reportlab>=4.0.0

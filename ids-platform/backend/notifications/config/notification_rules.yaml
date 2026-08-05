@@ -1,0 +1,9 @@
+# Severity -> notification channels. "dashboard" needs no external call -
+# the WebSocket alert broadcast (Milestone 6) already reaches every
+# connected client instantly; listing it here just makes that explicit for
+# severities where no other channel fires.
+
+Critical: [email, telegram, webhook]
+High: [email]
+Medium: [telegram]
+Low: [dashboard]

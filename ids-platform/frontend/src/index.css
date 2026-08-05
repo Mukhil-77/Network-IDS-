@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ *
+ * Theme tokens - dark is the default (an "ops room" monitoring tool),
+ * light overrides kick in as soon as the `.dark` class is absent on
+ * <html> (ThemeContext toggles it). Every surface/border/text token in
+ * tailwind.config.js reads these variables, so flipping theme = flipping
+ * a handful of vars instead of hundreds of utility classes.
+ * ------------------------------------------------------------------ */
+:root {
+  color-scheme: dark;
+
+  --surface: #0b1220;
+  --surface-raised: #111a2c;
+  --surface-overlay: #182238;
+  --border: #22304a;
+  --signal: #22d3ee;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-subtle: #64748b;
+  --text-faint: #475569;
+}
+
+html:not(.dark) {
+  color-scheme: light;
+
+  --surface: #f4f6fa;
+  --surface-raised: #ffffff;
+  --surface-overlay: #e9eef5;
+  --border: #d3dce8;
+  --signal: #0891b2;
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-subtle: #6b7a90;
+  --text-faint: #8b98ac;
+}
+
+* {
+  scrollbar-color: var(--border) var(--surface);
+}
+
+/* Visible keyboard focus everywhere - not just the default browser outline,
+   but not removed either. */
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

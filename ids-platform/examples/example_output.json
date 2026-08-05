@@ -1,0 +1,8 @@
+{
+  "prediction": "DoS",
+  "confidence": 72.86,
+  "severity": "High",
+  "model_version": "v1",
+  "latency_ms": 6.458,
+  "timestamp": "2026-07-23T12:34:06.893731+00:00"
+}
