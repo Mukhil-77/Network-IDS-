@@ -1,11 +1,12 @@
-"""Flow history data access - backs GET /flows."""
+"""Flow history data access - backs GET /flows and GET /flows/summary."""
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from backend.database.models import FlowHistory
@@ -59,3 +60,43 @@ class FlowRepository:
 
         items = list(self.db.execute(stmt).scalars().all())
         return PageResult(items=items, total=total, page=page, page_size=page_size)
+
+    def summary(self) -> dict:
+        """
+        Aggregate totals over the whole flow history: total flows, per-
+        protocol flow/packet/byte counts, and top talkers (most active
+        source IPs) - the numbers the Flows page's summary cards show.
+        """
+        rows = list(self.db.execute(select(FlowHistory)).scalars().all())
+
+        total_flows = len(rows)
+        total_packets = sum(r.packet_count for r in rows)
+        total_bytes = sum(r.byte_count for r in rows)
+
+        per_protocol: dict[str, dict] = {}
+        talker_counts: Counter[str] = Counter()
+        talker_bytes: Counter[str] = Counter()
+        for row in rows:
+            bucket = per_protocol.setdefault(row.protocol, {"flows": 0, "packets": 0, "bytes": 0})
+            bucket["flows"] += 1
+            bucket["packets"] += row.packet_count
+            bucket["bytes"] += row.byte_count
+            talker_counts[row.source_ip] += 1
+            talker_bytes[row.source_ip] += row.byte_count
+
+        top_talkers = [
+            {
+                "source_ip": ip,
+                "flows": talker_counts[ip],
+                "bytes": talker_bytes[ip],
+            }
+            for ip in talker_counts.most_common(10)
+        ]
+
+        return {
+            "total_flows": total_flows,
+            "total_packets": total_packets,
+            "total_bytes": total_bytes,
+            "per_protocol": per_protocol,
+            "top_talkers": top_talkers,
+        }

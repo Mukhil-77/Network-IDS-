@@ -35,6 +35,22 @@ def test_parses_syn_ack_flags_combined():
     assert parsed.tcp_flags == frozenset({"SYN", "ACK"})
 
 
+def test_parses_ipv6_tcp_packet():
+    from scapy.layers.inet6 import IPv6
+
+    pkt = IPv6(src="2001:db8::1", dst="2606:4700:103::2") / TCP(sport=443, dport=51000, flags="A") / Raw(load=b"x" * 20)
+    parsed = parse_packet(pkt)
+
+    assert parsed is not None
+    assert parsed.src_ip == "2001:db8::1"
+    assert parsed.dst_ip == "2606:4700:103::2"
+    assert parsed.src_port == 443
+    assert parsed.dst_port == 51000
+    assert parsed.protocol == "TCP"
+    assert "ACK" in parsed.tcp_flags
+    assert parsed.payload_length == 20
+
+
 def test_non_ip_packet_returns_none():
     from scapy.layers.l2 import ARP, Ether
 
@@ -42,11 +58,17 @@ def test_non_ip_packet_returns_none():
     assert parse_packet(pkt) is None
 
 
-def test_icmp_packet_returns_none():
+def test_parses_icmp_packet():
     from scapy.layers.inet import ICMP
 
     pkt = IP(src="10.0.0.1", dst="10.0.0.2") / ICMP()
-    assert parse_packet(pkt) is None
+    parsed = parse_packet(pkt)
+
+    assert parsed is not None
+    assert parsed.protocol == "ICMP"
+    assert parsed.src_port == 0
+    assert parsed.dst_port == 0
+    assert parsed.tcp_flags == frozenset()
 
 
 def test_malformed_packet_does_not_raise():

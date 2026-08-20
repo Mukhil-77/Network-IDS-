@@ -49,9 +49,19 @@ class ScapyCaptureBackend:
         self._sniffer.start()
 
     def stop(self) -> None:
-        if self._sniffer is not None:
-            self._sniffer.stop()
-            self._sniffer = None
+        sniffer = self._sniffer
+        self._sniffer = None
+        if sniffer is not None:
+            try:
+                sniffer.stop()
+            finally:
+                # Wait for the sniff thread to actually terminate so that
+                # when stop() returns, capture has genuinely ended - not
+                # still draining packets in the background.
+                try:
+                    sniffer.join(timeout=2)
+                except Exception:  # noqa: BLE001 - join() is best-effort
+                    pass
 
 
 class PySharkCaptureBackend:
@@ -116,13 +126,16 @@ class PacketCapture:
         interface: Optional[str] = None,
         backend: str = "scapy",
         filter_config: Optional[PacketFilterConfig] = None,
+        bpf_filter: Optional[str] = None,
     ):
         if backend not in ("scapy", "pyshark"):
             raise ValueError(f"Unknown capture backend '{backend}'; expected 'scapy' or 'pyshark'")
 
         self.flow_manager = flow_manager
         self.interface = interface
-        self.bpf_filter = build_bpf_filter(filter_config)
+        # A caller-supplied raw BPF expression wins over the declarative
+        # filter_config (used e.g. by POST /capture/start's bpf_filter field).
+        self.bpf_filter = bpf_filter or build_bpf_filter(filter_config)
         self._backend: CaptureBackend = (
             ScapyCaptureBackend(interface, self.bpf_filter)
             if backend == "scapy"
@@ -148,7 +161,12 @@ class PacketCapture:
     def stop(self) -> None:
         if not self._running:
             return
-        self._backend.stop()
-        self.flow_manager.stop()
-        self._running = False
-        logger.info("Packet capture stopped")
+        try:
+            self._backend.stop()
+        finally:
+            # Ensure the flow manager is always torn down and the flag always
+            # cleared, even if a backend hiccups mid-stop - an exception here
+            # must not leave the service believing capture is still live.
+            self.flow_manager.stop()
+            self._running = False
+            logger.info("Packet capture stopped")

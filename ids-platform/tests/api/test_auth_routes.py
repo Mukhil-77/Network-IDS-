@@ -55,17 +55,45 @@ class TestProtectedEndpoints:
 
 
 class TestRolePermissions:
-    def _register_and_login(self, client, username, role):
+    def _register_and_login(self, client, username, role=None):
         settings = get_settings()
-        # Registration itself requires no auth (see routes.py) - self-service signup.
+        # Registration itself requires no auth (see routes.py) - self-service
+        # signup. Self-registration is always Viewer, so an explicit role is
+        # accepted here for backwards compatibility but never applied.
         register_response = client.post("/auth/register", json={
-            "username": username, "email": f"{username}@example.com", "password": "Passw0rd123", "role": role,
+            "username": username, "email": f"{username}@example.com", "password": "Passw0rd123",
+            **({"role": role} if role else {}),
         })
         assert register_response.status_code == 201, register_response.text
 
         login_response = client.post("/auth/login", json={"username": username, "password": "Passw0rd123"})
         assert login_response.status_code == 200
         return login_response.json()["access_token"]
+
+    def _create_user_via_admin(self, client, username, role):
+        """Privileged accounts are created through POST /users, not self-registration."""
+        settings = get_settings()
+        login_response = client.post("/auth/login", json={
+            "username": settings.DEFAULT_ADMIN_USERNAME, "password": settings.DEFAULT_ADMIN_PASSWORD,
+        })
+        admin_token = login_response.json()["access_token"]
+        create_response = client.post(
+            "/users", json={
+                "username": username, "email": f"{username}@example.com", "password": "Passw0rd123", "role": role,
+            },
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert create_response.status_code == 201, create_response.text
+
+        login_response = client.post("/auth/login", json={"username": username, "password": "Passw0rd123"})
+        assert login_response.status_code == 200
+        return login_response.json()["access_token"]
+
+    def test_register_is_always_viewer_even_when_role_requested(self, unauthenticated_client):
+        token = self._register_and_login(unauthenticated_client, "upgrader1", "Security Analyst")
+        me = unauthenticated_client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json()["role"] == "Viewer"
 
     def test_viewer_can_read_alerts(self, unauthenticated_client):
         token = self._register_and_login(unauthenticated_client, "viewer1", "Viewer")
@@ -86,7 +114,7 @@ class TestRolePermissions:
         assert response.status_code == 403
 
     def test_security_analyst_can_execute_responses(self, unauthenticated_client):
-        token = self._register_and_login(unauthenticated_client, "analyst1", "Security Analyst")
+        token = self._create_user_via_admin(unauthenticated_client, "analyst1", "Security Analyst")
         # A real alert doesn't exist, so this correctly 404s rather than
         # 403 - proving the permission check passed and execution was attempted.
         response = unauthenticated_client.post(
@@ -96,7 +124,7 @@ class TestRolePermissions:
         assert response.status_code == 404
 
     def test_security_analyst_cannot_write_settings(self, unauthenticated_client):
-        token = self._register_and_login(unauthenticated_client, "analyst2", "Security Analyst")
+        token = self._create_user_via_admin(unauthenticated_client, "analyst2", "Security Analyst")
         response = unauthenticated_client.put(
             "/response-rules", json={"simulation_mode": False},
             headers={"Authorization": f"Bearer {token}"},
@@ -107,6 +135,41 @@ class TestRolePermissions:
         assert client.get("/users").status_code == 200
         assert client.get("/roles").status_code == 200
         assert client.get("/audit").status_code == 200
+
+    def test_viewer_cannot_create_users(self, unauthenticated_client):
+        token = self._register_and_login(unauthenticated_client, "viewer4")
+        response = unauthenticated_client.post(
+            "/users", json={"username": "sneaky", "email": "sneaky@example.com", "password": "Passw0rd123", "role": "Viewer"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+
+    def test_admin_can_create_user_change_role_and_toggle_status(self, unauthenticated_client):
+        settings = get_settings()
+        login_response = unauthenticated_client.post("/auth/login", json={
+            "username": settings.DEFAULT_ADMIN_USERNAME, "password": settings.DEFAULT_ADMIN_PASSWORD,
+        })
+        admin_token = login_response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        created = unauthenticated_client.post(
+            "/users", json={"username": "newbie", "email": "newbie@example.com", "password": "Passw0rd123", "role": "Viewer"},
+            headers=headers,
+        )
+        assert created.status_code == 201
+        assert created.json()["role"] == "Viewer"
+
+        changed = unauthenticated_client.put("/users/newbie/role", json={"role_name": "Security Analyst"}, headers=headers)
+        assert changed.status_code == 200
+        assert changed.json()["role"] == "Security Analyst"
+
+        deactivated = unauthenticated_client.post("/users/newbie/deactivate", headers=headers)
+        assert deactivated.status_code == 200
+        assert deactivated.json()["is_active"] is False
+
+        reactivated = unauthenticated_client.post("/users/newbie/reactivate", headers=headers)
+        assert reactivated.status_code == 200
+        assert reactivated.json()["is_active"] is True
 
 
 class TestRefreshAndLogout:

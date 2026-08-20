@@ -12,6 +12,13 @@ export interface RegisterRequest {
   role?: string;
 }
 
+export interface AdminCreateUserRequest {
+  username: string;
+  email: string;
+  password: string;
+  role: string;
+}
+
 export interface TokenResponse {
   access_token: string;
   refresh_token: string;

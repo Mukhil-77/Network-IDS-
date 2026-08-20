@@ -1,6 +1,7 @@
 import { apiClient } from "./apiClient";
 import { tokenStorage } from "../utils/tokenStorage";
 import type {
+  AdminCreateUserRequest,
   CurrentUser,
   ForgotPasswordRequest,
   LoginRequest,
@@ -61,6 +62,11 @@ export const authService = {
 
   getUsers: async (): Promise<CurrentUser[]> => {
     const { data } = await apiClient.get<CurrentUser[]>("/users");
+    return data;
+  },
+
+  createUser: async (payload: AdminCreateUserRequest): Promise<CurrentUser> => {
+    const { data } = await apiClient.post<CurrentUser>("/users", payload);
     return data;
   },
 

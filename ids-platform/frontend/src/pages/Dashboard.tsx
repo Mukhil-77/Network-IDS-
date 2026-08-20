@@ -1,5 +1,6 @@
 import { useStatistics } from "../hooks/useStatistics";
 import { useSystemHealth } from "../hooks/useSystemHealth";
+import { useCaptureStatus } from "../hooks/useCaptureStatus";
 import { useWebSocketAlerts } from "../context/WebSocketContext";
 import { StatCard } from "../components/dashboard/StatCard";
 import { SeverityBreakdownList } from "../components/dashboard/SeverityBreakdownList";
@@ -15,6 +16,7 @@ export default function Dashboard() {
   // endpoint that doesn't exist.
   const statsQuery = useStatistics(1440);
   const healthQuery = useSystemHealth();
+  const captureQuery = useCaptureStatus();
   const { liveAlerts } = useWebSocketAlerts();
 
   if (statsQuery.isError) {
@@ -29,6 +31,12 @@ export default function Dashboard() {
   // not a full historical count. See docs/FRONTEND_ARCHITECTURE.md.
   const activeAlerts = liveAlerts.filter((a) => a.status === "new").length;
 
+  // Avg Prediction Time reflects the current capture session's live
+  // predictions (backend reports 0/none until the first detection), so it
+  // stays "—" before capture and never shows stale historical numbers.
+  const sessionPredictions = captureQuery.data?.predictions_count ?? 0;
+  const avgLatency = captureQuery.data?.average_prediction_latency_ms;
+
   return (
     <div className="space-y-6">
       <h1 className="text-lg font-semibold text-slate-100">Dashboard</h1>
@@ -41,9 +49,18 @@ export default function Dashboard() {
             <StatCard label="Total Threats" value={String(stats!.threat_count)} />
             <StatCard label="Active Alerts (session)" value={String(activeAlerts)} accent="signal" />
             <StatCard label="Threats Today" value={String(threatsToday)} />
-            <StatCard 
-              label="Avg Prediction Time" 
-              value={`${stats!.average_prediction_latency_ms?.toFixed(2) ?? "—"} ms`} 
+            <StatCard
+              label="Avg Prediction Time"
+              value={
+                captureQuery.data?.running && sessionPredictions > 0
+                  ? `${avgLatency?.toFixed(2) ?? "—"} ms`
+                  : "—"
+              }
+              hint={
+                captureQuery.data?.running && sessionPredictions === 0
+                  ? "Waiting for first detection…"
+                  : "Measured live from this capture session"
+              }
             />
             <CaptureControl />
           </>

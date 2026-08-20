@@ -28,7 +28,9 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     email: EmailStr
     password: str = Field(..., min_length=8)
-    role: str = "Viewer"  # self-registration defaults to the least-privileged role
+    # Note: self-registration is *always* Viewer regardless of what the
+    # client sends - see POST /auth/register in auth/routes.py. The field
+    # is intentionally absent here so a malicious client can't escalate.
 
     @field_validator("password")
     @classmethod
@@ -36,6 +38,26 @@ class RegisterRequest(BaseModel):
         if not any(c.isupper() for c in value) or not any(c.isdigit() for c in value):
             raise ValueError("Password must contain at least one uppercase letter and one digit")
         return value
+
+
+class AdminCreateUserRequest(BaseModel):
+    """Body for POST /users (admin-only) - an operator-picked role is expected here."""
+
+    username: str = Field(..., min_length=3, max_length=64)
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    role: str = "Viewer"
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, value: str) -> str:
+        if not any(c.isupper() for c in value) or not any(c.isdigit() for c in value):
+            raise ValueError("Password must contain at least one uppercase letter and one digit")
+        return value
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role_name: str
 
 
 class UserResponse(BaseModel):

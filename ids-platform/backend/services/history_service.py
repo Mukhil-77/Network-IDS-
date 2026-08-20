@@ -23,5 +23,9 @@ class HistoryService:
         return FlowRepository(db).list(filters=filters, page=page, page_size=page_size)
 
     @staticmethod
+    def get_flow_summary(db: Session) -> dict:
+        return FlowRepository(db).summary()
+
+    @staticmethod
     def get_top_attacks(db: Session, limit: int = 10) -> list:
         return AttackStatisticsRepository(db).top(limit=limit)

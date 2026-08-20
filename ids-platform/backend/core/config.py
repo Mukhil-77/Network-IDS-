@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # backend.ml.predictor.get_predictor(models_dir=...).
     MODEL_PATH: str = "models"
 
+    # Where raw training CSVs live (the dataset POST /model/train trains on).
+    # The same layout backend.ml.preprocessing.preprocess_dataset expects as
+    # its CIC-IDS2017 input.
+    DATA_PATH: str = "data/raw"
+
     # Reported by GET / and GET /health, and used as the OpenAPI version.
     API_VERSION: str = "1.0.0"
 

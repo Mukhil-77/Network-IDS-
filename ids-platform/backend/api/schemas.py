@@ -62,6 +62,28 @@ class ModelVersionSummary(BaseModel):
     active: bool = False
 
 
+class ModelTrainRequest(BaseModel):
+    """POST /model/train - which algorithm family to train."""
+
+    algorithm: str = Field(..., description="Algorithm family, e.g. 'random_forest'.")
+
+
+class ModelTrainStatusResponse(BaseModel):
+    """GET /model/train/status - state of the most recent background training run."""
+
+    training: bool
+    algorithm: Optional[str] = None
+    error: Optional[str] = None
+    cancelled: bool = False
+
+
+class ModelDeleteResponse(BaseModel):
+    """DELETE /model/{version} result."""
+
+    removed: str
+    active_switched: bool
+
+
 # ---------------------------------------------------------------------------
 # Milestone 6: SOC backend schemas
 # ---------------------------------------------------------------------------

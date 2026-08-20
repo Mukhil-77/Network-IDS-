@@ -10,34 +10,41 @@ from __future__ import annotations
 import smtplib
 from email.message import EmailMessage
 
-from backend.core.config import get_settings
+from backend.notifications.channel_settings import get_channel
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class EmailService:
+    def _config(self) -> dict:
+        # Runtime store overrides env defaults; see channel_settings.py.
+        return get_channel("email")
+
     def send(self, to: str, subject: str, body: str) -> tuple[bool, str]:
         """
         Returns (success, message). Never raises - a notification failure
         must never crash whatever triggered it (a response action, a test
         button, etc.) - the caller decides what to do with a failure.
         """
-        settings = get_settings()
-        if not settings.SMTP_HOST or not to:
+        cfg = self._config()
+        smtp_host = cfg.get("smtp_host") or ""
+        if not smtp_host or not to:
             return False, "SMTP not configured (SMTP_HOST unset) or no recipient given"
 
         try:
+            from_address = cfg.get("from_address") or cfg.get("smtp_username") or ""
             msg = EmailMessage()
             msg["Subject"] = subject
-            msg["From"] = settings.ALERT_EMAIL_FROM or settings.SMTP_USERNAME
+            msg["From"] = from_address
             msg["To"] = to
             msg.set_content(body)
 
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+            port = int(cfg.get("smtp_port") or 587)
+            with smtplib.SMTP(smtp_host, port, timeout=10) as server:
                 server.starttls()
-                if settings.SMTP_USERNAME:
-                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                if cfg.get("smtp_username"):
+                    server.login(cfg.get("smtp_username"), cfg.get("smtp_password") or "")
                 server.send_message(msg)
             return True, f"Email sent to {to}"
         except Exception as exc:  # noqa: BLE001 - notification delivery must degrade gracefully, never raise

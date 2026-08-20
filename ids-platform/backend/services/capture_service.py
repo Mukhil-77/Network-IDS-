@@ -38,9 +38,15 @@ def _packet_payload(pkt: ParsedPacket) -> dict:
 class CaptureService:
     def __init__(self) -> None:
         # Wire detection -> alert saving/broadcasting
-        self.detection_service = DetectionService(on_alert_generated=alert_service.handle_detection)
+        self.detection_service = DetectionService(on_alert_generated=self._on_detection)
 
         self._recent_packets: deque[dict] = deque(maxlen=DEFAULT_MAX_STORED_PACKETS)
+
+        # Live-session prediction latencies (per capture session, not the
+        # historical alert average) - this is what the dashboard's
+        # "Avg Prediction Time" card shows while a capture is running.
+        self._session_latencies: deque[float] = deque(maxlen=1000)
+        self._session_predictions = 0
 
         # Wire flow closed -> detection, packet ingested -> live feed broadcast
         self.flow_manager = FlowManager(
@@ -49,6 +55,15 @@ class CaptureService:
         )
 
         self.capture: Optional[PacketCapture] = None
+        self.filter_config: Optional[PacketFilterConfig] = None
+
+    def _on_detection(self, alert: Any, flow: Any, prediction: Any) -> None:
+        """Record the prediction latency of this session, then save/broadcast the alert."""
+        latency_ms = getattr(prediction, "latency_ms", None)
+        if latency_ms is not None:
+            self._session_latencies.append(float(latency_ms))
+            self._session_predictions += 1
+        alert_service.handle_detection(alert, flow, prediction)
 
     def _handle_packet(self, pkt: ParsedPacket) -> None:
         """Record one parsed packet in the bounded buffer and broadcast it live."""
@@ -65,42 +80,63 @@ class CaptureService:
         self,
         interface: Optional[str] = None,
         backend: str = "scapy",
-        filter_config: Optional[PacketFilterConfig] = None
+        filter_config: Optional[PacketFilterConfig] = None,
+        bpf_filter: Optional[str] = None,
     ) -> None:
         if self.capture is not None:
             logger.warning("Capture already running")
             return
-            
+
         logger.info(f"Starting capture on interface {interface} with backend {backend}")
+        self.filter_config = filter_config or PacketFilterConfig()
+        self._session_latencies.clear()
+        self._session_predictions = 0
+
         self.capture = PacketCapture(
             flow_manager=self.flow_manager,
             interface=interface,
             backend=backend,
-            filter_config=filter_config
+            filter_config=self.filter_config,
+            bpf_filter=bpf_filter,
         )
         self.capture.start()
 
     def stop_capture(self) -> None:
-        if self.capture is not None:
-            logger.info("Stopping capture")
+        if self.capture is None:
+            return
+        try:
             self.capture.stop()
+        finally:
+            # Detach the capture no matter what so the service's status always
+            # reports "not running" once stop is requested - a backend hiccup
+            # during teardown must not leave capture appearing alive.
             self.capture = None
+            logger.info("Capture stopped")
 
     def get_status(self) -> dict[str, Any]:
         running = self.capture is not None
-        
+
         active_flows = 0
         packet_count = 0
         if running:
             active_flows = self.flow_manager.active_flow_count()
             packet_count = getattr(self.capture, 'packet_count', 0)
-            
+
+        avg_latency = (
+            sum(self._session_latencies) / len(self._session_latencies)
+            if self._session_latencies
+            else 0.0
+        )
+
         return {
             "running": running,
             "interface": self.capture.interface if running else None,
             "backend": self.capture._backend.__class__.__name__ if running else None,
             "active_flows": active_flows,
-            "packet_count": packet_count
+            "packet_count": packet_count,
+            "protocols": list(self.filter_config.protocols) if self.filter_config else None,
+            "predictions_count": self._session_predictions,
+            "average_prediction_latency_ms": round(avg_latency, 3),
         }
 
     def shutdown(self) -> None:

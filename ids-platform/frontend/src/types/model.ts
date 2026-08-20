@@ -23,3 +23,12 @@ export interface ModelVersionSummary {
   pca_components: number | null;
   active: boolean;
 }
+
+// Mirrors backend/api/schemas.py's ModelTrainStatusResponse
+// (GET /model/train/status, POST /model/train, POST /model/train/cancel).
+export interface ModelTrainStatus {
+  training: boolean;
+  algorithm: string | null;
+  error: string | null;
+  cancelled: boolean;
+}

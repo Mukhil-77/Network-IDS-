@@ -19,6 +19,7 @@ from backend.auth.jwt_manager import ExpiredTokenError, InvalidTokenError, _enco
 from backend.auth.models import Role, User
 from backend.auth.password import hash_password, verify_password
 from backend.auth.schemas import (
+    AdminCreateUserRequest,
     AuditLogResponse,
     ForgotPasswordRequest,
     LoginRequest,
@@ -29,6 +30,7 @@ from backend.auth.schemas import (
     ResetPasswordRequest,
     RoleResponse,
     TokenResponse,
+    UpdateUserRoleRequest,
     UserResponse,
 )
 from backend.database.connection import get_db
@@ -73,16 +75,19 @@ async def logout(
     authentication.logout(db, payload.refresh_token, user.username, get_client_ip(request))
 
 
-@router.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create a new user account")
+@router.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create a new user account (always as Viewer)")
 async def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)) -> UserResponse:
     if db.execute(select(User).where(User.username == payload.username)).first() is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken")
     if db.execute(select(User).where(User.email == payload.email)).first() is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
-    role = db.execute(select(Role).where(Role.name == payload.role)).scalars().first()
+    # Self-registration is locked to the least-privileged role: the request
+    # schema has no role field at all, so no client can ask for anything
+    # higher. Admins create privileged accounts via POST /users.
+    role = db.execute(select(Role).where(Role.name == "Viewer")).scalars().first()
     if role is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown role '{payload.role}'")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Viewer role is not seeded yet")
 
     user = User(username=payload.username, email=payload.email, hashed_password=hash_password(payload.password), role_id=role.id)
     db.add(user)
@@ -165,6 +170,94 @@ async def list_users(db: Session = Depends(get_db), _: User = Depends(require_pe
         UserResponse(id=u.id, username=u.username, email=u.email, role=u.role.name, is_active=u.is_active, created_at=u.created_at, last_login_at=u.last_login_at)
         for u in users
     ]
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create a user account (admin)")
+async def create_user(
+    payload: AdminCreateUserRequest,
+    request: Request,
+    actor: User = Depends(require_permission("users:write")),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    if db.execute(select(User).where(User.username == payload.username)).first() is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken")
+    if db.execute(select(User).where(User.email == payload.email)).first() is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+
+    role = db.execute(select(Role).where(Role.name == payload.role)).scalars().first()
+    if role is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown role '{payload.role}'")
+
+    user = User(username=payload.username, email=payload.email, hashed_password=hash_password(payload.password), role_id=role.id)
+    db.add(user)
+    db.flush()
+
+    audit.log_event(db, actor=actor.username, action=audit.USER_CREATED, role=actor.role.name, target=user.username, ip_address=get_client_ip(request), details={"role": role.name})
+
+    return UserResponse(id=user.id, username=user.username, email=user.email, role=role.name, is_active=user.is_active, created_at=user.created_at)
+
+
+@router.put("/users/{username}/role", response_model=UserResponse, summary="Change a user's role (admin)")
+async def update_user_role(
+    username: str,
+    payload: UpdateUserRoleRequest,
+    request: Request,
+    actor: User = Depends(require_permission("users:write")),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    user = db.execute(select(User).where(User.username == username)).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    role = db.execute(select(Role).where(Role.name == payload.role_name)).scalars().first()
+    if role is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown role '{payload.role_name}'")
+
+    old_role = user.role.name
+    user.role_id = role.id
+    audit.log_event(db, actor=actor.username, action=audit.ROLE_CHANGED, role=actor.role.name, target=user.username, ip_address=get_client_ip(request), details={"from": old_role, "to": role.name})
+
+    return UserResponse(id=user.id, username=user.username, email=user.email, role=role.name, is_active=user.is_active, created_at=user.created_at, last_login_at=user.last_login_at)
+
+
+def _set_user_active(
+    username: str,
+    is_active: bool,
+    actor: User,
+    request: Request,
+    db: Session,
+    action: str,
+) -> UserResponse:
+    user = db.execute(select(User).where(User.username == username)).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.username == actor.username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot deactivate or reactivate your own account")
+
+    user.is_active = is_active
+    audit.log_event(db, actor=actor.username, action=action, role=actor.role.name, target=user.username, ip_address=get_client_ip(request))
+
+    return UserResponse(id=user.id, username=user.username, email=user.email, role=user.role.name, is_active=user.is_active, created_at=user.created_at, last_login_at=user.last_login_at)
+
+
+@router.post("/users/{username}/deactivate", response_model=UserResponse, summary="Deactivate a user account (admin)")
+async def deactivate_user(
+    username: str,
+    request: Request,
+    actor: User = Depends(require_permission("users:write")),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    return _set_user_active(username, False, actor, request, db, audit.USER_DEACTIVATED)
+
+
+@router.post("/users/{username}/reactivate", response_model=UserResponse, summary="Reactivate a user account (admin)")
+async def reactivate_user(
+    username: str,
+    request: Request,
+    actor: User = Depends(require_permission("users:write")),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    return _set_user_active(username, True, actor, request, db, audit.USER_REACTIVATED)
 
 
 @router.get("/roles", response_model=list[RoleResponse], summary="List roles and their permissions")

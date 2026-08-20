@@ -35,6 +35,27 @@ vi.mock("../context/WebSocketContext", () => ({
   useWebSocketAlerts: () => ({ status: "open", liveAlerts: [] }),
 }));
 
+vi.mock("../services/captureService", () => ({
+  captureService: {
+    status: vi.fn().mockResolvedValue({
+      running: true,
+      interface: "Ethernet",
+      backend: "ScapyCaptureBackend",
+      active_flows: 3,
+      packet_count: 120,
+      protocols: ["tcp", "udp"],
+      predictions_count: 5,
+      average_prediction_latency_ms: 4.2,
+    }),
+    interfaces: vi.fn().mockResolvedValue([
+      { name: "Ethernet", description: "Ethernet · NPF_ETH0" },
+      { name: "Wi-Fi", description: "Wi-Fi · NPF_WIFI0" },
+    ]),
+    start: vi.fn().mockResolvedValue({ message: "Capture started", bpf_filter: "(ip or ip6) and (tcp or udp)" }),
+    stop: vi.fn().mockResolvedValue({ message: "Capture stopped" }),
+  },
+}));
+
 import Dashboard from "./Dashboard";
 
 describe("Dashboard", () => {
@@ -44,7 +65,9 @@ describe("Dashboard", () => {
     renderWithProviders(<Dashboard />);
 
     expect(await screen.findByText("42")).toBeInTheDocument(); // Total Threats
-    expect(screen.getByText("4.2 ms")).toBeInTheDocument(); // Avg. Prediction Time
+    // Avg Prediction Time comes from the live capture session and is shown
+    // both on the StatCard and inside CaptureControl's status block.
+    expect(screen.getAllByText("4.20 ms").length).toBeGreaterThan(0);
   });
 
   it("renders the threats-today figure derived from per-minute buckets", async () => {

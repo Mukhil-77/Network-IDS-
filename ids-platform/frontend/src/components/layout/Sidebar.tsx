@@ -34,15 +34,15 @@ export function Sidebar({ open }: { open: boolean }) {
   return (
     <aside
       className={clsx(
-        "fixed inset-y-0 left-0 z-40 w-56 transform border-r border-border bg-surface-raised transition-transform duration-200 md:fixed md:translate-x-0",
+        "fixed inset-y-0 left-0 z-40 flex w-56 transform flex-col border-r border-border bg-surface-raised transition-transform duration-200 md:fixed md:translate-x-0",
         open ? "translate-x-0" : "-translate-x-full"
       )}
     >
-      <div className="flex h-14 items-center gap-2 border-b border-border px-4">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
         <span className="h-2 w-2 rounded-full bg-signal shadow-[0_0_8px_theme(colors.signal.DEFAULT)]" />
         <span className="font-mono text-sm font-semibold tracking-wide text-slate-100">SOC · DASHBOARD</span>
       </div>
-      <nav className="flex flex-col gap-0.5 p-2">
+      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
         {visibleItems.map((item) => (
           <NavLink
             key={item.to}

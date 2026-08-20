@@ -9,3 +9,11 @@ export function useFlows(filters: FlowFilters) {
     placeholderData: (previous) => previous,
   });
 }
+
+export function useFlowSummary() {
+  return useQuery({
+    queryKey: ["flows", "summary"],
+    queryFn: flowsService.summary,
+    placeholderData: (previous) => previous,
+  });
+}

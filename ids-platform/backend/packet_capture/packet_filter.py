@@ -16,9 +16,10 @@ from typing import Optional
 @dataclass
 class PacketFilterConfig:
     """
-    Declarative capture filter. Defaults to "IPv4 TCP or UDP only" - the
-    same scope CIC-IDS2017 (and therefore the trained model) covers; see
-    packet_parser.py's module docstring.
+    Declarative capture filter. Defaults to "IPv4/IPv6 TCP or UDP only" -
+    the transport protocols CIC-IDS2017 (and therefore the trained model)
+    cover, on both IP versions so IPv6-heavy environments still feed the
+    live packet view; see packet_parser.py's module docstring.
     """
 
     protocols: tuple[str, ...] = ("tcp", "udp")
@@ -32,11 +33,11 @@ def build_bpf_filter(config: Optional[PacketFilterConfig] = None) -> str:
 
     Example:
         build_bpf_filter(PacketFilterConfig(protocols=("tcp",), exclude_hosts=["10.0.0.1"]))
-        -> "ip and tcp and not host 10.0.0.1"
+        -> "(ip or ip6) and tcp and not host 10.0.0.1"
     """
     cfg = config or PacketFilterConfig()
 
-    clauses = ["ip"]
+    clauses = ["(ip or ip6)"]
 
     if cfg.protocols:
         clauses.append("(" + " or ".join(cfg.protocols) + ")")

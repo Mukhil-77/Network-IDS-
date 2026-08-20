@@ -39,6 +39,7 @@ PERMISSION_CATALOG: dict[str, str] = {
     "incidents:read": "View incidents",
     "incidents:write": "Create, assign, or update incidents",
     "notifications:test": "Send a test notification",
+    "model:train": "Train or delete ML model versions",
 }
 
 # Default role -> permission-name set. Applied only when seeding a fresh

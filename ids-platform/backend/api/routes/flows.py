@@ -35,3 +35,11 @@ async def list_flows(
         items=[FlowHistoryResponse.model_validate(row) for row in result.items],
         total=result.total, page=result.page, page_size=result.page_size,
     )
+
+
+@router.get("/flows/summary", summary="Aggregate totals and top talkers across flow history")
+async def flow_summary(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("flows:read")),
+) -> dict:
+    return HistoryService.get_flow_summary(db)

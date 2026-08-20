@@ -11,15 +11,21 @@ export default function Reports() {
 
   const [reportType, setReportType] = useState("daily");
   const [format, setFormat] = useState<ReportGenerateRequest["format"]>("pdf");
+  const [downloading, setDownloading] = useState<{ type: string; format: string } | null>(null);
 
-  const handleGenerate = async () => {
-    const blob = await generateMutation.mutateAsync({ report_type: reportType, format });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${reportType}_report.${format}`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const download = async (type: string, fmt: ReportGenerateRequest["format"]) => {
+    setDownloading({ type, format: fmt });
+    try {
+      const blob = await generateMutation.mutateAsync({ report_type: type, format: fmt });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${type}_report.${fmt}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(null);
+    }
   };
 
   if (typesQuery.isLoading) return <CardSkeleton />;
@@ -55,7 +61,7 @@ export default function Reports() {
             </select>
           </div>
           <button
-            onClick={handleGenerate} disabled={generateMutation.isPending}
+            onClick={() => download(reportType, format)} disabled={generateMutation.isPending}
             className="rounded-md bg-signal px-4 py-1.5 text-sm font-medium text-surface hover:bg-signal/90 disabled:opacity-40"
           >
             {generateMutation.isPending ? "Generating…" : "Generate & Download"}
@@ -69,9 +75,26 @@ export default function Reports() {
         <h2 className="mb-3 text-sm font-medium text-slate-300">Available Report Types</h2>
         <ul className="divide-y divide-border text-sm">
           {typesQuery.data?.map((t) => (
-            <li key={t.report_type} className="flex items-center justify-between py-2">
-              <span className="text-slate-200">{t.title}</span>
-              <span className="font-mono text-xs text-slate-500">{t.available_formats.join(" · ")}</span>
+            <li key={t.report_type} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <div>
+                <span className="text-slate-200">{t.title}</span>
+                <span className="ml-2 font-mono text-xs text-slate-500">
+                  {t.available_formats.join(" · ")}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                {t.available_formats.map((fmt) => (
+                  <button
+                    key={fmt}
+                    type="button"
+                    onClick={() => download(t.report_type, fmt as ReportGenerateRequest["format"])}
+                    disabled={generateMutation.isPending}
+                    className="rounded-md border border-border bg-surface-overlay px-2.5 py-1 text-xs font-medium text-slate-300 hover:border-signal/50 hover:text-signal disabled:opacity-40"
+                  >
+                    {downloading?.type === t.report_type && downloading.format === fmt ? "Downloading…" : `Download ${fmt.toUpperCase()}`}
+                  </button>
+                ))}
+              </div>
             </li>
           ))}
         </ul>

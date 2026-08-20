@@ -1,11 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { modelService } from "../services/modelService";
+
+const ALGORITHMS = [
+  { value: "random_forest", label: "Random Forest" },
+  { value: "decision_tree", label: "Decision Tree" },
+  { value: "knn", label: "K-Nearest Neighbors" },
+  { value: "logistic_regression", label: "Logistic Regression" },
+  { value: "svm", label: "SVM" },
+];
 
 export function Models() {
   const queryClient = useQueryClient();
   const [switching, setSwitching] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
+
+  const [algorithm, setAlgorithm] = useState(ALGORITHMS[0].value);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const trainStatusQuery = useQuery({
+    queryKey: ["modelTrainStatus"],
+    queryFn: modelService.trainStatus,
+    refetchInterval: (query) => (query.state.data?.training ? 2000 : false),
+  });
 
   const infoQuery = useQuery({
     queryKey: ["modelInfo"],
@@ -15,6 +33,7 @@ export function Models() {
   const versionsQuery = useQuery({
     queryKey: ["modelVersions"],
     queryFn: modelService.listVersions,
+    refetchInterval: (query) => (trainStatusQuery.data?.training ? 3000 : false),
   });
 
   const switchMutation = useMutation({
@@ -29,6 +48,35 @@ export function Models() {
     onError: (error: Error) => setSwitchError(error.message),
   });
 
+  const trainMutation = useMutation({
+    mutationFn: modelService.train,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["modelTrainStatus"] });
+    },
+    onError: (error: Error) => setDeleteError(error.message),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: modelService.cancelTrain,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["modelTrainStatus"] });
+    },
+    onError: (error: Error) => setDeleteError(error.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: modelService.deleteVersion,
+    onSuccess: () => {
+      setDeleting(null);
+      queryClient.invalidateQueries({ queryKey: ["modelVersions"] });
+      queryClient.invalidateQueries({ queryKey: ["modelInfo"] });
+    },
+    onError: (error: Error) => {
+      setDeleting(null);
+      setDeleteError(error.message);
+    },
+  });
+
   const handleActivate = async (version: string) => {
     setSwitching(version);
     setSwitchError(null);
@@ -39,15 +87,91 @@ export function Models() {
     }
   };
 
+  const handleDelete = async (version: string) => {
+    if (!window.confirm(`Delete model version ${version} from disk?`)) return;
+    setDeleteError(null);
+    setDeleting(version);
+    await deleteMutation.mutateAsync(version);
+  };
+
   const { data, isLoading, error } = infoQuery;
+  const trainingStatus = trainStatusQuery.data;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-100">Machine Learning Models</h1>
         <p className="text-slate-400 mt-2">
-          View active model information, compare trained versions, and switch which one detection uses.
+          View active model information, compare trained versions, train new models in the background, and switch which version detection uses.
         </p>
+      </div>
+
+      {/* Train a new model */}
+      <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+        <div className="px-6 py-5 border-b border-gray-700">
+          <h2 className="text-lg font-medium text-slate-100">Train a New Model</h2>
+        </div>
+        <div className="p-6">
+          {trainingStatus?.training ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                <p className="text-sm text-slate-300">
+                  Training <span className="font-mono text-blue-400">{trainingStatus.algorithm}</span> in the background…
+                  new versions appear in the table below when it finishes.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending}
+                className="px-4 py-2 rounded-md text-sm font-medium border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cancelMutation.isPending ? "Stopping…" : "Stop Training"}
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <select
+                value={algorithm}
+                onChange={(e) => setAlgorithm(e.target.value)}
+                className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+              >
+                {ALGORITHMS.map((a) => (
+                  <option key={a.value} value={a.value}>{a.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => trainMutation.mutate(algorithm)}
+                disabled={trainMutation.isPending || trainingStatus?.training}
+                className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {trainMutation.isPending ? "Starting…" : "Start Training"}
+              </button>
+              <button
+                type="button"
+                onClick={() => trainMutation.mutate("all")}
+                disabled={trainMutation.isPending || trainingStatus?.training}
+                className="px-4 py-2 rounded-md text-sm font-medium border border-blue-500/40 text-blue-400 hover:bg-blue-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Train All Families
+              </button>
+              <p className="text-xs text-gray-500">
+                Runs on the dataset at <code className="font-mono">DATA_PATH</code> and saves every fitted
+                variant as its own version. "Train All Families" trains every algorithm back-to-back.
+              </p>
+            </div>
+          )}
+          {trainingStatus?.cancelled && (
+            <p className="mt-2 text-sm text-amber-400">
+              Training was stopped by operator request. Versions saved before the stop remain in the table below.
+            </p>
+          )}
+          {trainingStatus?.error && (
+            <p className="mt-2 text-sm text-red-400">Last training run failed: {trainingStatus.error}</p>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
@@ -170,7 +294,7 @@ export function Models() {
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-3 text-right">
+                    <td className="px-6 py-3 text-right whitespace-nowrap">
                       {!version.active && (
                         <button
                           type="button"
@@ -181,6 +305,14 @@ export function Models() {
                           {switching === version.version ? "Switching…" : "Activate"}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(version.version)}
+                        disabled={deleting !== null}
+                        className="ml-2 px-3 py-1.5 rounded-md text-xs font-medium border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {deleting === version.version ? "Deleting…" : "Delete"}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -195,6 +327,11 @@ export function Models() {
         {switchError && (
           <div className="px-6 py-3 border-t border-gray-700 bg-red-500/10 text-sm text-red-400">
             {switchError}
+          </div>
+        )}
+        {deleteError && (
+          <div className="px-6 py-3 border-t border-gray-700 bg-red-500/10 text-sm text-red-400">
+            {deleteError}
           </div>
         )}
       </div>

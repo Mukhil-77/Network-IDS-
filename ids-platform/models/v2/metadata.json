@@ -1,11 +1,11 @@
 {
-  "model_name": "RandomForestClassifier (rf2)",
+  "model_name": "random_forest_2",
   "dataset": "CIC-IDS2017",
-  "training_date": "2026-08-05T04:41:47.042998+00:00",
-  "accuracy": 0.9817142857142858,
-  "precision": 0.9815491809307095,
-  "recall": 0.9816641747268685,
-  "f1_score": 0.9815594398786927,
+  "training_date": "2026-08-07T04:49:40.683806+00:00",
+  "accuracy": 0.9856,
+  "precision": 0.9855798996464687,
+  "recall": 0.9855110402081686,
+  "f1_score": 0.9855223990456322,
   "features": [
     "PC1",
     "PC2",

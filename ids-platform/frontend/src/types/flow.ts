@@ -27,3 +27,12 @@ export interface FlowFilters {
   page?: number;
   page_size?: number;
 }
+
+// Mirrors GET /flows/summary (backend/database/repositories/flows.py).
+export interface FlowSummary {
+  total_flows: number;
+  total_packets: number;
+  total_bytes: number;
+  per_protocol: Record<string, { flows: number; packets: number; bytes: number }>;
+  top_talkers: { source_ip: string; flows: number; bytes: number }[];
+}

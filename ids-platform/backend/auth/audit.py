@@ -27,6 +27,9 @@ REGISTER = "user_registered"
 PASSWORD_CHANGED = "password_changed"
 PROFILE_UPDATED = "profile_updated"
 ROLE_CHANGED = "role_changed"
+USER_CREATED = "user_created"
+USER_DEACTIVATED = "user_deactivated"
+USER_REACTIVATED = "user_reactivated"
 
 
 def log_event(

@@ -1,6 +1,7 @@
 import { useState } from "react";
 
-import { useResponses, useRollbackResponse } from "../hooks/useResponses";
+import { useExecuteResponse, useResponses, useRollbackResponse } from "../hooks/useResponses";
+import { useAuth } from "../context/AuthContext";
 import { ResponseHistoryTable } from "../components/responses/ResponseHistoryTable";
 import { Pagination } from "../components/common/Pagination";
 import { TableSkeleton } from "../components/common/LoadingSkeleton";
@@ -14,6 +15,23 @@ export default function ResponseHistoryPage() {
   const [filters, setFilters] = useState<ResponseFilters>(DEFAULT_FILTERS);
   const query = useResponses(filters);
   const rollbackMutation = useRollbackResponse();
+  const executeMutation = useExecuteResponse();
+  const { hasPermission } = useAuth();
+  const canExecute = hasPermission("responses:execute");
+  const [rerunningId, setRerunningId] = useState<string | null>(null);
+
+  const handleRerun = async (entry: { id: string; alert_id: string; action: string; mode: string }) => {
+    setRerunningId(entry.id);
+    try {
+      await executeMutation.mutateAsync({
+        alert_id: entry.alert_id,
+        actions: [entry.action],
+        mode: entry.mode === "live" ? "live" : "simulation",
+      });
+    } finally {
+      setRerunningId(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -63,6 +81,8 @@ export default function ResponseHistoryPage() {
             responses={query.data.items}
             onRollback={(id) => rollbackMutation.mutate(id)}
             rollingBackId={rollbackMutation.isPending ? rollbackMutation.variables : undefined}
+            onRerun={canExecute ? handleRerun : undefined}
+            rerunningId={rerunningId}
           />
           <Pagination
             page={query.data.page}

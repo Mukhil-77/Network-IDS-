@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { packetsService } from "../../services/packetsService";
 import type { LivePacket } from "../../context/WebSocketContext";
@@ -30,6 +30,9 @@ export function LivePacketsFeed({ livePackets, socketStatus }: LivePacketsFeedPr
     staleTime: 5_000,
   });
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+
   const rows = useMemo<LivePacket[]>(() => {
     if (historyQuery.data?.length) {
       const known = new Set(livePackets.map((packet) => `${packet.timestamp}-${packet.src_ip}-${packet.length}-${packet.seq}`));
@@ -42,6 +45,14 @@ export function LivePacketsFeed({ livePackets, socketStatus }: LivePacketsFeedPr
   const isLive = socketStatus === "open";
   const totalSeen = rows.length > 0 ? Math.max(livePackets[0]?.seq ?? 0, rows.length) : rows.length;
 
+  // Newest packets stream in at the top; keep the view pinned there while
+  // auto-scroll is on so the operator always sees the freshest traffic.
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  }, [rows, autoScroll]);
+
   return (
     <div className="rounded-xl border border-border bg-surface-raised">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -50,12 +61,21 @@ export function LivePacketsFeed({ livePackets, socketStatus }: LivePacketsFeedPr
           <h2 className="text-sm font-medium text-slate-200">Live Packet Stream</h2>
         </div>
         <div className="flex items-center gap-4 text-xs text-slate-400">
+          <label className="flex cursor-pointer select-none items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+              className="accent-blue-500"
+            />
+            Auto-scroll
+          </label>
           <span>{isLive ? "streaming" : "socket closed"}</span>
           <span className="font-mono">{totalSeen} packets</span>
         </div>
       </div>
 
-      <div className="max-h-[420px] overflow-auto">
+      <div ref={scrollRef} className="max-h-[420px] overflow-auto">
         {rows.length === 0 ? (
           <div className="px-4 py-10 text-center text-sm text-slate-500">
             <p className="font-medium text-slate-400">No packets yet</p>

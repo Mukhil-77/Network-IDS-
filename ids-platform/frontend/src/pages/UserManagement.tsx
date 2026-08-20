@@ -8,6 +8,9 @@ export function UserManagement() {
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<string>("");
 
+  const [newUser, setNewUser] = useState({ username: "", email: "", password: "", role: "Viewer" });
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const usersQuery = useQuery({
     queryKey: ["users"],
     queryFn: authService.getUsers,
@@ -35,6 +38,16 @@ export function UserManagement() {
     },
   });
 
+  const createUserMutation = useMutation({
+    mutationFn: authService.createUser,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setNewUser({ username: "", email: "", password: "", role: "Viewer" });
+      setCreateError(null);
+    },
+    onError: (error: Error) => setCreateError(error.message),
+  });
+
   const handleRoleChange = (user: CurrentUser) => {
     if (selectedRole && selectedRole !== user.role) {
       updateRoleMutation.mutate({ username: user.username, role: selectedRole });
@@ -48,8 +61,46 @@ export function UserManagement() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-100">User Management</h1>
           <p className="text-gray-400 mt-2">
-            Manage system access, roles, and account status.
+            Manage system access, roles, and account status. Self-registration always creates Viewer accounts; create
+            privileged users here.
           </p>
+        </div>
+
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
+          <h2 className="text-lg font-medium text-slate-100 mb-3">Create a User</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <input
+              value={newUser.username} onChange={(e) => setNewUser((f) => ({ ...f, username: e.target.value }))}
+              placeholder="Username"
+              className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+            />
+            <input
+              type="email" value={newUser.email} onChange={(e) => setNewUser((f) => ({ ...f, email: e.target.value }))}
+              placeholder="Email"
+              className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+            />
+            <input
+              type="password" value={newUser.password} onChange={(e) => setNewUser((f) => ({ ...f, password: e.target.value }))}
+              placeholder="Password (8+ chars, upper + digit)"
+              className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+            />
+            <select
+              value={newUser.role} onChange={(e) => setNewUser((f) => ({ ...f, role: e.target.value }))}
+              className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+            >
+              {rolesQuery.data?.map((role) => (
+                <option key={role.name} value={role.name}>{role.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => createUserMutation.mutate(newUser)}
+              disabled={createUserMutation.isPending || !newUser.username || !newUser.email || !newUser.password}
+              className="rounded-md bg-blue-600 hover:bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors disabled:opacity-50"
+            >
+              {createUserMutation.isPending ? "Creating…" : "Create User"}
+            </button>
+          </div>
+          {createError && <p className="mt-2 text-sm text-red-400">{createError}</p>}
         </div>
 
         <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">

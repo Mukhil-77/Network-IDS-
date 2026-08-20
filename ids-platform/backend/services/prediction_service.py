@@ -19,6 +19,7 @@ flows straight through to backend.ml.inference.predict().
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from backend.ml import artifacts, inference
@@ -33,6 +34,12 @@ logger = get_logger(__name__)
 class PredictionService:
     def __init__(self, models_dir: str):
         self.models_dir = models_dir
+        self._training_lock = threading.Lock()
+        self._training: bool = False
+        self._training_algorithm: str | None = None
+        self._training_error: str | None = None
+        self._training_cancelled: bool = False
+        self._cancel_requested: bool = False
 
     def startup(self) -> None:
         """
@@ -168,6 +175,126 @@ class PredictionService:
         reset_predictor()
         logger.info("Reset models: removed %s", removed or ["<none>"])
         return removed
+
+    # ------------------------------------------------------------------
+    # Training from the API (POST /model/train, DELETE /model/{version})
+    # ------------------------------------------------------------------
+
+    def train_model(self, algorithm: str) -> bool:
+        """
+        Kick off a background training run for one algorithm family (reusing
+        backend.ml.train_one.run_family). Returns True if a run was started,
+        False if one is already in progress. The run state is observable via
+        training_status(); versions poll /model/versions once it completes.
+        """
+        with self._training_lock:
+            if self._training:
+                return False
+            self._training = True
+            self._training_algorithm = algorithm
+            self._training_error = None
+            self._training_cancelled = False
+            self._cancel_requested = False
+
+        from backend.ml import train_one
+
+        thread = threading.Thread(target=self._run_training, args=(train_one, algorithm), daemon=True)
+        thread.start()
+        logger.info("Background training started for family '%s'", algorithm)
+        return True
+
+    def cancel_training(self) -> bool:
+        """
+        Request the in-flight background training run to stop at its next
+        checkpoint. Returns True if a run was in progress (and the request was
+        recorded), False if nothing is training.
+        """
+        with self._training_lock:
+            if not self._training:
+                return False
+            self._cancel_requested = True
+            return True
+
+    def _cancel_requested_flag(self) -> bool:
+        with self._training_lock:
+            return self._cancel_requested
+
+    def _run_training(self, train_one_module, algorithm: str) -> None:
+        from backend.core.config import get_settings
+
+        try:
+            if algorithm == train_one_module.ALL_ALGORITHMS:
+                saved = train_one_module.run_all(
+                    get_settings().DATA_PATH,
+                    self.models_dir,
+                    should_stop=self._cancel_requested_flag,
+                )
+            else:
+                saved = train_one_module.run_family(
+                    get_settings().DATA_PATH,
+                    algorithm,
+                    self.models_dir,
+                    should_stop=self._cancel_requested_flag,
+                )
+            if saved and not self.is_model_loaded():
+                # First model on disk -> make it active so detection works
+                # immediately without a manual switch.
+                best = max(saved, key=lambda entry: entry.get("accuracy") or 0)
+                self.switch_model(Path(best["version_dir"]).name)
+                logger.info("Auto-activated first trained model %s", Path(best["version_dir"]).name)
+        except train_one_module.TrainingCancelled:
+            logger.info("Background training '%s' cancelled by operator", algorithm)
+            with self._training_lock:
+                self._training_cancelled = True
+        except Exception as exc:  # noqa: BLE001 - surfaced via training_status(), never crashes the process
+            logger.exception("Background training failed for family '%s'", algorithm)
+            with self._training_lock:
+                self._training_error = str(exc)
+        finally:
+            with self._training_lock:
+                self._training = False
+                self._cancel_requested = False
+
+    def training_status(self) -> dict:
+        with self._training_lock:
+            return {
+                "training": self._training,
+                "algorithm": self._training_algorithm,
+                "error": self._training_error,
+                "cancelled": self._training_cancelled,
+            }
+
+    def delete_model(self, version: str) -> dict:
+        """
+        Delete one model version directory. If it was the active model, the
+        newest remaining version becomes active (or the predictor is unloaded
+        if none remain). Raises ArtifactNotFoundError for an unknown version.
+        """
+        version_dir = Path(self.models_dir) / version
+        if not version_dir.is_dir():
+            raise ArtifactNotFoundError(f"No model version directory found: {version_dir}")
+
+        was_active = False
+        try:
+            was_active = self._active_predictor().version_label == version
+        except ArtifactNotFoundError:
+            pass
+
+        for file in list(version_dir.iterdir()):
+            file.unlink()
+        version_dir.rmdir()
+
+        if was_active:
+            remaining = artifacts.list_versions(self.models_dir)
+            if remaining:
+                next_version = f"v{max(remaining)}"
+                self.switch_model(next_version)
+                logger.info("Active model %s deleted; switched active model to %s", version, next_version)
+            else:
+                reset_predictor()
+                logger.info("Active model %s deleted; no models remain, predictor unloaded", version)
+
+        return {"removed": version, "active_switched": was_active}
 
 
 # --------------------------------------------------------------------------

@@ -8,7 +8,7 @@ export default function Register() {
   const { register, login } = useAuth();
   const navigate = useNavigate();
 
-  const [form, setForm] = useState({ username: "", email: "", password: "", role: "Viewer" });
+  const [form, setForm] = useState({ username: "", email: "", password: "" });
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -62,16 +62,9 @@ export default function Register() {
             />
             <p className="mt-1 text-xs text-slate-600">At least 8 characters, one uppercase letter, one digit.</p>
           </div>
-          <div>
-            <label className="mb-1 block text-xs text-slate-500">Role</label>
-            <select
-              value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
-              className="w-full rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-slate-100 focus:border-signal focus:outline-none"
-            >
-              <option value="Viewer">Viewer</option>
-              <option value="Security Analyst">Security Analyst</option>
-              <option value="Admin">Admin</option>
-            </select>
+          <div className="rounded-md border border-border bg-surface-overlay px-3 py-2 text-xs text-slate-500">
+            New accounts are created with <span className="font-medium text-slate-300">Viewer</span> access
+            (read-only) by default. An administrator can grant more permissions later.
           </div>
 
           <button

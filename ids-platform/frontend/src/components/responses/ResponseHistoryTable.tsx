@@ -5,6 +5,8 @@ interface ResponseHistoryTableProps {
   responses: ResponseHistoryEntry[];
   onRollback?: (responseId: string) => void;
   rollingBackId?: string;
+  onRerun?: (response: { id: string; alert_id: string; action: string; mode: string }) => void;
+  rerunningId?: string | null;
 }
 
 const STATUS_CLASSES: Record<string, string> = {
@@ -21,7 +23,7 @@ function StatusChip({ status }: { status: string }) {
   );
 }
 
-export function ResponseHistoryTable({ responses, onRollback, rollingBackId }: ResponseHistoryTableProps) {
+export function ResponseHistoryTable({ responses, onRollback, rollingBackId, onRerun, rerunningId }: ResponseHistoryTableProps) {
   if (responses.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-slate-500">
@@ -42,7 +44,7 @@ export function ResponseHistoryTable({ responses, onRollback, rollingBackId }: R
             <th className="px-4 py-3 font-medium">Mode</th>
             <th className="px-4 py-3 font-medium">Operator</th>
             <th className="px-4 py-3 font-medium">Duration</th>
-            <th className="px-4 py-3 font-medium">Rollback</th>
+            <th className="px-4 py-3 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -58,19 +60,30 @@ export function ResponseHistoryTable({ responses, onRollback, rollingBackId }: R
               <td className="px-4 py-2.5 text-slate-400">{response.operator}</td>
               <td className="px-4 py-2.5 font-mono text-slate-300">{response.execution_time_ms.toFixed(1)} ms</td>
               <td className="px-4 py-2.5">
-                {response.rolled_back ? (
-                  <span className="text-xs text-slate-600">rolled back</span>
-                ) : response.rollback_available && onRollback ? (
-                  <button
-                    onClick={() => onRollback(response.id)}
-                    disabled={rollingBackId === response.id}
-                    className="rounded-md border border-border px-2 py-1 text-xs font-medium text-slate-300 hover:border-signal/50 hover:text-signal disabled:opacity-40"
-                  >
-                    {rollingBackId === response.id ? "Rolling back…" : "Rollback"}
-                  </button>
-                ) : (
-                  <span className="text-xs text-slate-600">—</span>
-                )}
+                <div className="flex items-center gap-2">
+                  {onRerun && (
+                    <button
+                      onClick={() => onRerun({ id: response.id, alert_id: response.alert_id, action: response.action, mode: response.mode })}
+                      disabled={rerunningId === response.id}
+                      className="rounded-md border border-border px-2 py-1 text-xs font-medium text-slate-300 hover:border-signal/50 hover:text-signal disabled:opacity-40"
+                    >
+                      {rerunningId === response.id ? "Re-running…" : "Re-run"}
+                    </button>
+                  )}
+                  {response.rolled_back ? (
+                    <span className="text-xs text-slate-600">rolled back</span>
+                  ) : response.rollback_available && onRollback ? (
+                    <button
+                      onClick={() => onRollback(response.id)}
+                      disabled={rollingBackId === response.id}
+                      className="rounded-md border border-border px-2 py-1 text-xs font-medium text-slate-300 hover:border-signal/50 hover:text-signal disabled:opacity-40"
+                    >
+                      {rollingBackId === response.id ? "Rolling back…" : "Rollback"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
+                </div>
               </td>
             </tr>
           ))}
