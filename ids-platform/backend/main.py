@@ -15,8 +15,10 @@ untouched.
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from backend.api.routes import api_router
@@ -140,12 +142,62 @@ register_exception_handlers(app)
 app.include_router(auth_router, tags=["Auth"])
 app.include_router(api_router)
 
+# Desktop-app packaging: when a built frontend directory is configured, the
+# JSON root endpoint below is replaced by the packaged React app (SPA). The
+# fallback route registered at the end of this module serves the built
+# assets and answers every non-API GET with index.html so client-side
+# routing works. Registered last on purpose - the explicit API routes and
+# the OpenAPI docs (/docs, /redoc, /openapi.json) all take precedence.
+_serving_frontend = bool(settings.FRONTEND_DIST) and Path(settings.FRONTEND_DIST).is_dir()
 
-@app.get("/", response_model=RootResponse, tags=["Root"], summary="API information")
-async def root() -> RootResponse:
-    return RootResponse(
-        name="AI-Powered Network Threat Detection API",
-        description="Real-time network intrusion detection and severity scoring.",
-        version=settings.API_VERSION,
-        docs_url="/docs",
-    )
+if not _serving_frontend:
+
+    @app.get("/", response_model=RootResponse, tags=["Root"], summary="API information")
+    async def root() -> RootResponse:
+        return RootResponse(
+            name="AI-Powered Network Threat Detection API",
+            description="Real-time network intrusion detection and severity scoring.",
+            version=settings.API_VERSION,
+            docs_url="/docs",
+        )
+
+
+if _serving_frontend:
+    _frontend_dist = Path(settings.FRONTEND_DIST).resolve()
+
+    @app.get("/{full_path:path}", include_in_schema=False, summary="Packaged frontend (SPA)")
+    async def _serve_frontend(full_path: str) -> FileResponse:
+        candidate = (_frontend_dist / full_path).resolve()
+        in_dist = _frontend_dist == candidate or _frontend_dist in candidate.parents
+        if full_path and in_dist and candidate.is_file():
+            return FileResponse(candidate)
+        index = _frontend_dist / "index.html"
+        if index.is_file():
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="Frontend build not found")
+
+    # A few SPA routes share their exact path with real API endpoints
+    # (/alerts, /flows, /analytics, /users, /audit, ...). The React router
+    # navigates client-side once index.html is loaded, so this middleware
+    # only needs to win for full page loads, which browsers send as GET with
+    # Accept: text/html. Data fetches (axios) send Accept: application/json
+    # and pass straight through to the API as normal. Registered last so it
+    # runs first - before request routing - while still letting every
+    # explicit route below take precedence for API calls.
+    _SPA_ROUTES = frozenset({
+        "/", "/login", "/register", "/forgot-password", "/reset-password",
+        "/alerts", "/flows", "/statistics", "/system-health", "/response-center",
+        "/response-history", "/policy-manager", "/reports", "/analytics",
+        "/threat-intelligence", "/incidents", "/notification-settings",
+        "/profile", "/settings", "/testing", "/models", "/users", "/audit",
+    })
+
+    @app.middleware("http")
+    async def _spa_shell_middleware(request: Request, call_next):
+        if request.method == "GET" and request.url.path in _SPA_ROUTES:
+            accept = request.headers.get("accept", "")
+            if "text/html" in accept:
+                index = _frontend_dist / "index.html"
+                if index.is_file():
+                    return FileResponse(index)
+        return await call_next(request)

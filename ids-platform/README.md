@@ -123,6 +123,24 @@ See `deployment/` for Docker Compose (backend, frontend, PostgreSQL,
 Prometheus, Grafana; optional Redis and ELK profiles), Dockerfiles, nginx
 configuration, and Prometheus alert rules.
 
+## Windows desktop app
+
+The same backend and React frontend also ship as a single Windows desktop
+application (`SOC-Platform Setup.exe`) with no manual `uvicorn`/`npm`
+commands. Electron (`desktop/`) starts the backend (packaged by PyInstaller
+as `SOC-Engine.exe`, entrypoint `desktop_entry.py`), serves the built
+frontend from the backend's `FRONTEND_DIST` setting, and keeps per-user
+data/secrets in `%LOCALAPPDATA%\SOC-Platform`.
+
+- Dev run: `desktop\scripts\dev.ps1`
+- Installer build: `desktop\scripts\build.ps1`
+- Details: `desktop/README.md`
+
+The `FRONTEND_DIST`, `RESPONSE_RULES_PATH`, `NOTIFICATION_RULES_PATH`, and
+`CHANNEL_SETTINGS_PATH` settings were added for the packaged desktop mode;
+they are empty/absent in normal server development, where behaviour is
+unchanged.
+
 ## Known limitations
 
 1. Notification services (email/Telegram/webhook) log to console only - no

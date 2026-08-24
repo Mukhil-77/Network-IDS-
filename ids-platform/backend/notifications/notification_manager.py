@@ -15,6 +15,7 @@ alert. Available for other code to call `notify()` directly too.
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -32,15 +33,28 @@ DEFAULT_RULES_PATH = Path(__file__).parent / "config" / "notification_rules.yaml
 VALID_CHANNELS = {"email", "telegram", "webhook", "dashboard"}
 
 
+def _resolve_rules_path() -> Path:
+    """
+    Desktop-app packaging: the default path lives next to the code (read-only
+    in a frozen PyInstaller build), but update_rules() writes it back, so the
+    Electron shell points NOTIFICATION_RULES_PATH at a writable user-data copy.
+    Falls back to the packaged default when unset (normal/bundled dev).
+    """
+    override = os.environ.get("NOTIFICATION_RULES_PATH")
+    if override:
+        return Path(override)
+    return DEFAULT_RULES_PATH
+
+
 class NotificationManager:
     def __init__(
         self,
-        rules_path: Path = DEFAULT_RULES_PATH,
+        rules_path: Optional[Path] = None,
         email_service: EmailService = default_email_service,
         telegram_service: TelegramService = default_telegram_service,
         webhook_service: WebhookService = default_webhook_service,
     ):
-        self.rules_path = rules_path
+        self.rules_path = rules_path or _resolve_rules_path()
         self.email_service = email_service
         self.telegram_service = telegram_service
         self.webhook_service = webhook_service

@@ -20,3 +20,12 @@ venv/
 
 # User requested
 ids-platform/data/raw/
+
+# Build artifacts
+ids-platform/dist-engine/
+ids-platform/build/
+ids-platform/frontend/dist/
+desktop/release/
+desktop/build/
+desktop/.runtime/
+*.log

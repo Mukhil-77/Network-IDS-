@@ -1,0 +1,58 @@
+# electron-builder configuration for SOC Platform desktop shell.
+# Run from desktop/ : npm run dist
+appId: com.socplatform.desktop
+productName: SOC Platform
+copyright: "© SOC Platform Team"
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - src/**/*
+  - package.json
+
+asar: true
+
+# Runtime payload shipped next to app.asar under <resources>\...
+#   engine\SOC-Engine\SOC-Engine.exe  -> PyInstaller onedir bundle
+#   frontend\                         -> compiled React/Vite build
+#   models\                           -> default trained model artifacts
+#   defaults\                         -> editable policy/config defaults
+extraResources:
+  - from: ../ids-platform/dist-engine/SOC-Engine
+    to: engine/SOC-Engine
+  - from: ../ids-platform/frontend/dist
+    to: frontend
+  - from: ../ids-platform/models
+    to: models
+  - from: ../ids-platform/backend/response_engine/config/response_rules.yaml
+    to: defaults/response_rules.yaml
+  - from: ../ids-platform/backend/notifications/config/notification_rules.yaml
+    to: defaults/notification_rules.yaml
+  - from: ../ids-platform/backend/notifications/config/channel_settings.json
+    to: defaults/channel_settings.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: SOC-Platform-Setup-${version}.${ext}
+  # Skip rcedit/metadata editing and code-sign tool caching. electron-builder
+  # otherwise downloads winCodeSign (whose macOS sign tools contain symlinks
+  # that 7-Zip cannot restore without Developer Mode / admin privileges on
+  # Windows). Set this back to true to embed icon/metadata and to sign -
+  # requires Windows Developer Mode enabled (or an admin shell).
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SOC Platform
+
+# No publish step - local artifacts only.
+publish: null

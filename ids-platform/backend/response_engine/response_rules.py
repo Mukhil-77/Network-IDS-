@@ -12,6 +12,7 @@ control and doesn't require a migration to change.
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -26,13 +27,26 @@ logger = get_logger(__name__)
 DEFAULT_RULES_PATH = Path(__file__).parent / "config" / "response_rules.yaml"
 
 
+def _resolve_rules_path() -> Path:
+    """
+    Desktop-app packaging: the default path lives next to the code (read-only
+    in a frozen PyInstaller build), but PUT /response-rules writes it back, so
+    the Electron shell points RESPONSE_RULES_PATH at a writable user-data copy.
+    Falls back to the packaged default when unset (normal/bundled dev).
+    """
+    override = os.environ.get("RESPONSE_RULES_PATH")
+    if override:
+        return Path(override)
+    return DEFAULT_RULES_PATH
+
+
 class InvalidPolicyError(Exception):
     """Raised when a policy update references an action that isn't registered."""
 
 
 class PolicyEngine:
-    def __init__(self, rules_path: Path = DEFAULT_RULES_PATH):
-        self.rules_path = rules_path
+    def __init__(self, rules_path: Optional[Path] = None):
+        self.rules_path = rules_path or _resolve_rules_path()
         self._lock = threading.RLock()
         self._policies: dict[str, list[str]] = {}
         self._simulation_mode: bool = True

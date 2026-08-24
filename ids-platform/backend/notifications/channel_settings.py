@@ -16,6 +16,7 @@ value, so a partial file is fine and deleting an entry falls back to env.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -24,6 +25,19 @@ from backend.utils.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_SETTINGS_PATH = Path(__file__).parent / "config" / "channel_settings.json"
+
+
+def _settings_path() -> Path:
+    """
+    Desktop-app packaging: the default path is next to the code (read-only in
+    a frozen PyInstaller build), but the Notification Settings UI writes it, so
+    the Electron shell points CHANNEL_SETTINGS_PATH at a writable user-data copy.
+    Falls back to the packaged default when unset (normal/bundled dev).
+    """
+    override = os.environ.get("CHANNEL_SETTINGS_PATH")
+    if override:
+        return Path(override)
+    return DEFAULT_SETTINGS_PATH
 
 # All keys the Notification Settings UI can edit, per channel. The email
 # recipient field is called `to_address` internally but rendered as
@@ -62,7 +76,7 @@ def _env_defaults() -> dict:
 
 
 def _load_file() -> dict:
-    path = DEFAULT_SETTINGS_PATH
+    path = _settings_path()
     if not path.is_file():
         return {}
     try:
@@ -108,7 +122,7 @@ def save_channel_settings(channel: str, values: dict) -> dict:
         channel_store = _cache.setdefault(channel, {})
         channel_store.update({k: v for k, v in values.items() if v is not None})
 
-        path = DEFAULT_SETTINGS_PATH
+        path = _settings_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(_cache, f, indent=2, sort_keys=True)

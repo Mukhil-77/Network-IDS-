@@ -1,7 +1,11 @@
 @echo off
-echo ==============================================
-echo  SOC Dashboard Project Setup and Run Script
-echo ==============================================
+REM ==============================================
+REM  SOC Platform - Setup and Run (desktop app)
+REM
+REM One-time install, then launches the SOC Platform
+REM desktop app (Electron). The app starts the Python
+REM security engine and the React dashboard by itself.
+REM ==============================================
 
 cd "%~dp0"
 
@@ -42,14 +46,23 @@ IF NOT EXIST "node_modules" (
 cd ..\..
 
 echo.
-echo [3] Starting the services...
+echo [3] Setting up desktop shell (desktop)...
+cd desktop
 
-echo Starting backend server...
-start cmd /k "title Backend Server && cd ids-platform && call venv\Scripts\activate.bat && python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
-
-echo Starting frontend server...
-start cmd /k "title Frontend Server && cd ids-platform\frontend && npm run dev"
+IF NOT EXIST "node_modules" (
+    echo Installing desktop dependencies...
+    call npm install
+)
+cd ..
 
 echo.
-echo Done! The services are starting in separate windows.
-pause
+echo [4] Launching the SOC Platform desktop app...
+echo     - Python security engine  : 127.0.0.1:8000
+echo     - React dashboard         : inside the app window
+echo     - Logs                    : desktop\.runtime\logs  (dev)
+echo.
+echo Note: close the app window to shut everything down.
+echo.
+
+REM Launch the Electron dev app (it spawns the engine + Vite automatically).
+powershell -NoProfile -ExecutionPolicy Bypass -File "desktop\scripts\dev.ps1"

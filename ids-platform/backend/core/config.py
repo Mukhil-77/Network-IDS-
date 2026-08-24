@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # Desktop-app packaging: path to the built React frontend (a Vite
+    # `dist` directory) to serve. When set and the directory exists, the
+    # API also serves the SPA (assets + index.html fallback) so the
+    # packaged desktop app is a single origin - no separate frontend
+    # dev server, no CORS. Left empty (the default) in normal dev.
+    FRONTEND_DIST: str = ""
+
     LOG_LEVEL: str = "INFO"
 
     # Comma-separated list of allowed CORS origins, or "*" for any origin.
