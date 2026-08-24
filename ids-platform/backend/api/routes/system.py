@@ -13,8 +13,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 
-from backend.auth.dependencies import get_current_user
-from backend.auth.models import User
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import SystemHealthResponse, SystemStatsResponse
@@ -29,7 +27,7 @@ router = APIRouter()
 
 
 @router.get("/health", response_model=SystemHealthResponse, summary="Extended, DB-backed system health (persists a snapshot)")
-async def system_health(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> SystemHealthResponse:
+async def system_health(db: Session = Depends(get_db)) -> SystemHealthResponse:
     model_loaded = prediction_service.is_model_loaded()
     model_version = None
     if model_loaded:
@@ -63,7 +61,7 @@ async def system_health(db: Session = Depends(get_db), user: User = Depends(get_
 
 
 @router.get("/stats", response_model=SystemStatsResponse, summary="Live OS telemetry: CPU, memory, disk, network, GPU (task-manager view)")
-async def system_stats(user: User = Depends(get_current_user)) -> SystemStatsResponse:
+async def system_stats() -> SystemStatsResponse:
     from backend.services.system_metrics import collect_system_stats
 
     stats = collect_system_stats()

@@ -24,6 +24,11 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
+// Catch unhandled promise rejections so they don't silently kill the app
+process.on("unhandledRejection", (reason, promise) => {
+  log("UNHANDLED REJECTION:", reason);
+});
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -289,9 +294,15 @@ function createWindow(url) {
     },
   });
 
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    win.show();
+  });
   win.setMenuBarVisibility(!isPackaged);
   win.loadURL(url);
+  // Apply zoom after the page has fully loaded – avoids "not a function" race
+  win.webContents.on("did-finish-load", () => {
+    try { win.webContents.setZoomFactor(0.9); } catch (e) { log("setZoomFactor failed:", e); }
+  });
   win.webContents.on("did-fail-load", (_e, code, desc, validatedURL) => {
     log("Window failed to load", validatedURL, code, desc);
   });

@@ -35,6 +35,7 @@ from backend.ml.schemas import PredictionResponse
 from backend.packet_capture.flow_manager import Flow
 from backend.utils.logger import get_logger
 from backend.websocket.broadcaster import AlertBroadcaster, broadcaster as default_broadcaster
+from backend.threat_intelligence.reputation import reputation_registry as _reputation_registry
 
 logger = get_logger(__name__)
 
@@ -96,12 +97,32 @@ class AlertService:
 
     @staticmethod
     def _persist_alert(db, alert: Alert, flow: Flow, prediction: PredictionResponse) -> AlertRow:
+        # Reputation check for the source IP - this informs the threat_tag
+        # and may influence the displayed severity without discarding a
+        # genuinely malicious flow from a trusted source.
+        reputation_result = _reputation_registry.check_ip(db, alert.source_ip)
+        threat_tag = reputation_result.tag  # "Known Malicious" | "Suspicious" | "Unknown" | "Trusted"
+
+        # Adjust severity based on reputation, but never fully suppress
+        # detection for a trusted source - a truly malicious flow from a
+        # trusted IP is still flagged, just with a reduced severity level
+        # so the operator can review.
+        severity = alert.severity  # default to the model's verdict
+        if threat_tag == "Trusted" and alert.confidence >= 80:
+            severity = "Low"
+        elif threat_tag == "Trusted" and alert.confidence < 80:
+            severity = "Legitimate"
+        elif threat_tag == "Known Malicious":
+            severity = alert.severity  # keep original
+        elif threat_tag == "Suspicious":
+            severity = alert.severity  # keep original
+
         row = AlertRow(
             id=alert.id,
             timestamp=datetime.fromisoformat(alert.timestamp),
             attack_type=alert.attack,
             confidence=alert.confidence,
-            severity=alert.severity,
+            severity=severity,
             source_ip=alert.source_ip,
             destination_ip=alert.destination_ip,
             protocol=alert.protocol,
@@ -111,6 +132,7 @@ class AlertService:
             status="new",
             model_version=alert.model_version,
             processing_time_ms=prediction.latency_ms,
+            threat_tag=threat_tag,
         )
         return AlertRepository(db).create(row)
 

@@ -2,6 +2,32 @@ import type { AlertRow, AlertFilters } from "../../types/alert";
 import { SeverityBadge, StatusBadge } from "../common/Badge";
 import { formatTimestamp } from "../../utils/formatters";
 
+function threatTagBg(tag: string) {
+  switch (tag) {
+    case "Trusted":
+      return "bg-green-100 text-green-800";
+    case "Known Malicious":
+      return "bg-red-100 text-red-800";
+    case "Suspicious":
+      return "bg-orange-100 text-orange-800";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+function threatTagFg(tag: string) {
+  switch (tag) {
+    case "Trusted":
+      return "text-green-800";
+    case "Known Malicious":
+      return "text-red-800";
+    case "Suspicious":
+      return "text-orange-800";
+    default:
+      return "text-slate-700";
+  }
+}
+
 interface AlertsTableProps {
   alerts: AlertRow[];
   sortBy: AlertFilters["sort_by"];
@@ -72,6 +98,17 @@ export function AlertsTable({ alerts, sortBy, sortDesc, onSortChange }: AlertsTa
               <td className="px-4 py-2.5 text-slate-400">{alert.protocol}</td>
               <td className="px-4 py-2.5">
                 <StatusBadge status={alert.status} />
+                {alert.threat_tag && alert.threat_tag !== "Unknown" && (
+                  <span
+                    className="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ml-2"
+                    style={{
+                      background: threatTagBg(alert.threat_tag),
+                      color: threatTagFg(alert.threat_tag),
+                    }}
+                  >
+                    {alert.threat_tag}
+                  </span>
+                )}
               </td>
             </tr>
           ))}

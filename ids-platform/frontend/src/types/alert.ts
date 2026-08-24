@@ -21,6 +21,7 @@ export interface AlertRow {
   packet_count?: number;
   bytes?: number;
   processing_time_ms?: number;
+  threat_tag?: string;
 }
 
 export interface PaginatedAlerts {
