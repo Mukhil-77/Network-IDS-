@@ -27,20 +27,57 @@ interface WebSocketContextValue {
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 
 function toAlertRow(payload: LiveAlertPayload): AlertRow {
+  // Map severity string to Severity type
+  const severityMap: Record<string, "Critical" | "High" | "Medium" | "Low" | "Legitimate" | "Unknown"> = {
+    "Critical": "Critical",
+    "High": "High",
+    "Medium": "Medium",
+    "Low": "Low",
+    "Legitimate": "Legitimate",
+    "Unknown": "Unknown",
+  };
+  
+  const severity = severityMap[payload.severity] || "Medium";
+  
+  // Map severity to risk level
+  const severityToRiskLevel: Record<string, "LOW" | "GUARDED" | "MEDIUM" | "HIGH" | "CRITICAL"> = {
+    "Critical": "CRITICAL",
+    "High": "HIGH",
+    "Medium": "MEDIUM",
+    "Low": "LOW",
+    "Legitimate": "LOW",
+    "Unknown": "MEDIUM",
+  };
+  
+  // Simple threat tag inference based on severity and attack type
+  let threatTag: "Known Malicious" | "Suspicious" | "Unknown" | "Trusted" = "Unknown";
+  if (payload.severity === "Critical" || payload.severity === "High") {
+    threatTag = "Known Malicious";
+  } else if (payload.severity === "Medium") {
+    threatTag = "Suspicious";
+  } else if (payload.severity === "Low") {
+    threatTag = "Trusted";
+  }
+  
   return {
     id: payload.id,
     timestamp: payload.timestamp,
     attack_type: payload.attack,
     confidence: payload.confidence,
-    severity: payload.severity,
+    severity: severity,
+    risk_score: Math.round(payload.confidence),
+    risk_level: severityToRiskLevel[payload.severity] || "MEDIUM",
     source_ip: payload.source_ip,
     destination_ip: payload.destination_ip,
     protocol: payload.protocol,
     flow_id: payload.flow_id,
     model_version: payload.model_version,
-    // Not present on the live WS payload (see types/websocket.ts's
-    // docstring) - "new" matches the default AlertService persists with.
     status: "new",
+    threat_tag: threatTag,
+    priority: payload.severity === "Critical" ? "P1_CRITICAL" : 
+              payload.severity === "High" ? "P2_HIGH" :
+              payload.severity === "Medium" ? "P3_MEDIUM" : "P4_LOW",
+    priority_score: payload.confidence,
   };
 }
 

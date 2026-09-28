@@ -7,12 +7,14 @@ import type { AlertRow } from "../../types/alert";
 const sampleAlerts: AlertRow[] = [
   {
     id: "a1", timestamp: "2026-07-24T10:00:00Z", attack_type: "DoS", confidence: 95.5,
-    severity: "High", source_ip: "10.0.0.1", destination_ip: "10.0.0.9", protocol: "TCP",
+    severity: "High", risk_score: 85, risk_level: "HIGH", threat_tag: "Suspicious",
+    source_ip: "10.0.0.1", destination_ip: "10.0.0.9", protocol: "TCP",
     flow_id: "f1", status: "new", model_version: "v1",
   },
   {
     id: "a2", timestamp: "2026-07-24T09:00:00Z", attack_type: "PortScan", confidence: 60.0,
-    severity: "Medium", source_ip: "10.0.0.2", destination_ip: "10.0.0.9", protocol: "TCP",
+    severity: "Medium", risk_score: 45, risk_level: "MEDIUM", threat_tag: "Unknown",
+    source_ip: "10.0.0.2", destination_ip: "10.0.0.9", protocol: "TCP",
     flow_id: "f2", status: "resolved", model_version: "v1",
   },
 ];

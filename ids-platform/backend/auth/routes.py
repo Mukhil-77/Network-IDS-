@@ -67,12 +67,15 @@ async def refresh(payload: RefreshRequest, request: Request, db: Session = Depen
     return TokenResponse(access_token=access_token, refresh_token=refresh_token, expires_in=expires_in)
 
 
+from fastapi import Response
+
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, summary="Revoke the current session's refresh token")
 async def logout(
     payload: RefreshRequest, request: Request,
     user: User = Depends(get_current_user), db: Session = Depends(get_db),
-) -> None:
+) -> Response:
     authentication.logout(db, payload.refresh_token, user.username, get_client_ip(request))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create a new user account (always as Viewer)")
@@ -143,7 +146,7 @@ async def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(
 
 
 @router.post("/auth/reset-password", status_code=status.HTTP_204_NO_CONTENT, summary="Complete a password reset (placeholder)")
-async def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> None:
+async def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> Response:
     try:
         token_payload = decode_token(payload.reset_token, expected_type=RESET_TOKEN_TYPE)
     except (InvalidTokenError, ExpiredTokenError) as exc:
@@ -155,6 +158,8 @@ async def reset_password(payload: ResetPasswordRequest, db: Session = Depends(ge
 
     user.hashed_password = hash_password(payload.new_password)
     audit.log_event(db, actor=user.username, action=audit.PASSWORD_CHANGED, role=user.role.name, details={"method": "reset"})
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _issue_reset_token(user: User) -> tuple[str, datetime]:

@@ -164,32 +164,15 @@ def prepare_multiclass_dataset(
 ) -> Dataset:
     """
     Build the balanced multi-class (attack type) dataset: keep classes with
-    enough support, cap oversized classes, then SMOTE-upsample everything
-    else to the majority class size.
+    enough support, cap oversized classes, then apply SMOTE ONLY to the
+    training data after train/test split to prevent data leakage.
 
-    Converted from notebook cells 109-112:
-        class_counts = new_data['Attack Type'].value_counts()
-        selected_classes = class_counts[class_counts > 1950]
-        ...
-        for name in class_names:
-            df = selected[selected['Attack Type'] == name]
-            if len(df) > 2500:
-                df = df.sample(n=5000, random_state=0)
-            dfs.append(df)
-        df = pd.concat(dfs, ignore_index=True)
-
-        smote = SMOTE(sampling_strategy='auto', random_state=0)
-        X_upsampled, y_upsampled = smote.fit_resample(X, y)
-        blnc_data = ...sample(frac=1)  # shuffle
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            features, labels, test_size=0.25, random_state=0)
-
-    NOTE: the `df.sample(n=cap_per_class, ...)` step uses
-    `min(cap_per_class, len(df))` rather than the notebook's bare
-    `n=cap_per_class` - see the NOTE on MULTICLASS_CAP_THRESHOLD /
-    MULTICLASS_CAP_PER_CLASS in constants.py for why (crash-safety only,
-    same balancing intent).
+    Correct order (leakage-safe):
+        1. Filter classes by min count
+        2. Cap oversized classes
+        2. Split into train/test (stratified)
+        3. Apply SMOTE ONLY to training data
+        4. Keep test set untouched
 
     Args:
         pca_df: PCA-transformed DataFrame (PC1..PCn + target_column).
@@ -203,7 +186,7 @@ def prepare_multiclass_dataset(
 
     Returns:
         A Dataset with X_train/X_test (PCA features) and y_train/y_test
-        (attack-type strings, SMOTE-balanced).
+        (attack-type strings, training data SMOTE-balanced, test data untouched).
     """
     class_counts = pca_df[target_column].value_counts()
     selected_classes = class_counts[class_counts > min_class_count]
@@ -223,26 +206,30 @@ def prepare_multiclass_dataset(
         capped_frames.append(class_df)
 
     capped = pd.concat(capped_frames, ignore_index=True)
-    logger.info("Multi-class dataset before SMOTE:\n%s", capped[target_column].value_counts().to_string())
+    logger.info("Multi-class dataset after class capping (before split):\n%s", capped[target_column].value_counts().to_string())
 
     X = capped.drop(columns=[target_column])
     y = capped[target_column]
 
-    smote = SMOTE(sampling_strategy="auto", random_state=random_state)
-    X_upsampled, y_upsampled = smote.fit_resample(X, y)
-
-    balanced = pd.DataFrame(X_upsampled)
-    balanced[target_column] = y_upsampled
-    balanced = balanced.sample(frac=1, random_state=random_state)  # shuffle
-    logger.info("Multi-class dataset after SMOTE:\n%s", balanced[target_column].value_counts().to_string())
-
-    features = balanced.drop(columns=[target_column])
-    labels = balanced[target_column]
-
+    # CORRECT ORDER: Split first, then apply SMOTE only to training data
     X_train, X_test, y_train, y_test = train_test_split(
-        features, labels, test_size=test_size, random_state=random_state
+        X, y, test_size=test_size, random_state=random_state, stratify=y
     )
-    return Dataset(X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test)
+
+    logger.info("Train class distribution before SMOTE:\n%s", y_train.value_counts().to_string())
+
+    smote = SMOTE(sampling_strategy="auto", random_state=random_state)
+    X_train_upsampled, y_train_upsampled = smote.fit_resample(X_train, y_train)
+
+    logger.info("Train class distribution after SMOTE:\n%s", pd.Series(y_train_upsampled).value_counts().to_string())
+    logger.info("Test class distribution (untouched):\n%s", y_test.value_counts().to_string())
+
+    return Dataset(
+        X_train=pd.DataFrame(X_train_upsampled, columns=X_train.columns),
+        X_test=X_test,
+        y_train=pd.Series(y_train_upsampled, name=target_column),
+        y_test=y_test
+    )
 
 
 # ==========================================================================

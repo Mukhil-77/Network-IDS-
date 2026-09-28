@@ -44,6 +44,7 @@ class ParsedPacket:
     header_length: int  # combined IP + transport header length, used by *_Header_Length features
     payload_length: int  # transport-layer payload size
     tcp_flags: frozenset[str]  # subset of {"SYN","ACK","FIN","RST","PSH","URG","ECE","CWR"}; empty for UDP/ICMP
+    flow_id: str = ""  # Set by FlowManager when packet is added to a flow
 
 
 _TCP_FLAG_BITS = {

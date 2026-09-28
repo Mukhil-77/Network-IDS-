@@ -31,6 +31,7 @@ import { AttackSimulation } from "./pages/AttackSimulation";
 import { Models } from "./pages/Models";
 import { UserManagement } from "./pages/UserManagement";
 import { AuditLog } from "./pages/AuditLog";
+import ExperimentDashboard from "./pages/ExperimentDashboard";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +80,7 @@ export default function App() {
                   <Route path="/models" element={<ProtectedRoute><Models /></ProtectedRoute>} />
                   <Route path="/users" element={<ProtectedRoute requiredPermission="users:read"><UserManagement /></ProtectedRoute>} />
                   <Route path="/audit" element={<ProtectedRoute requiredPermission="audit:read"><AuditLog /></ProtectedRoute>} />
+                  <Route path="/experiments" element={<ProtectedRoute requiredPermission="analytics:read"><ExperimentDashboard /></ProtectedRoute>} />
                 </Route>
               </Routes>
             </WebSocketProvider>

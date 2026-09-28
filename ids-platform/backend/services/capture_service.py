@@ -32,6 +32,7 @@ def _packet_payload(pkt: ParsedPacket) -> dict:
         "protocol": pkt.protocol,
         "length": pkt.length,
         "flags": sorted(pkt.tcp_flags),
+        "flow_id": pkt.flow_id,
     }
 
 

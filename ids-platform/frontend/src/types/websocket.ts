@@ -33,6 +33,7 @@ export interface LivePacketPayload {
   protocol: string;
   length: number;
   flags: string[];
+  flow_id: string;
 }
 
 export interface WSEvent {

@@ -1,124 +1,119 @@
 """
-Attack type -> severity mapping.
+Attack Severity Mapping
 
-The spec's mapping only covers 6 of the labels backend.ml.constants.ATTACK_MAP
-can actually produce (BENIGN, DDoS, DoS, Port Scan, Brute Force, Bot). This
-module extends it to cover every label the trained model can output -
-Web Attack - Brute Force, XSS, SQL Injection, Heartbleed, UNKNOWN - using
-the same judgment call a security analyst would (web/memory-exploit
-attacks are Critical; anything genuinely unrecognized defaults to Medium
-rather than being silently dropped to Low). These additions are flagged
-below; adjust DEFAULT_SEVERITY_MAP freely if your intended ranking differs.
-
-"Configurable" (per the spec) means: the mapping is a plain dict, callers
-can pass their own to get_severity()/build_severity_map(), and it can be
-overridden at runtime by pointing SEVERITY_CONFIG_PATH at a JSON file -
-no code change required to re-rank a label.
+Maps attack types to severity levels and provides consistent severity scoring.
 """
 
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-from typing import Optional
+from enum import Enum
+from typing import Final
 
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class Severity:
-    """Severity levels, ordered low to high. Plain string constants (not an Enum) so they serialize directly."""
-
-    LOW = "Low"
-    MEDIUM = "Medium"
-    HIGH = "High"
-    CRITICAL = "Critical"
+class SeverityLevel(Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
 
 
-# --------------------------------------------------------------------------
-# Default mapping. Entries above the "--- spec ---" line are exactly as
-# given in the Milestone 3 requirements. Entries below are additions
-# (flagged in the module docstring) covering every other label
-# constants.ATTACK_MAP can produce.
-# --------------------------------------------------------------------------
-DEFAULT_SEVERITY_MAP: dict[str, str] = {
-    # --- spec ---
-    "DDoS": Severity.CRITICAL,
-    "Infiltration": Severity.CRITICAL,
-    "DoS": Severity.HIGH,
-    "Brute Force": Severity.HIGH,
-    "Port Scan": Severity.MEDIUM,
-    "Bot": Severity.MEDIUM,
-    "BENIGN": Severity.LOW,
-    # --- additions, not in the original spec ---
-    "Heartbleed": Severity.CRITICAL,  # memory-disclosure exploit; treated like Infiltration
-    "SQL Injection": Severity.CRITICAL,  # can lead to full data compromise
-    "XSS": Severity.HIGH,
-    "Web Attack - Brute Force": Severity.HIGH,  # matches "Brute Force" above
-    "UNKNOWN": Severity.MEDIUM,  # unrecognized traffic: not dismissed as Low, not alarmed as Critical
+# Attack type to severity mapping
+ATTACK_SEVERITY_MAP: Final[dict[str, str]] = {
+    "BENIGN": "LOW",
+    "UNKNOWN": "HIGH",
+    "DoS": "HIGH",
+    "DDoS": "CRITICAL",
+    "Port Scan": "MEDIUM",
+    "Port Scan": "MEDIUM",
+    "Brute Force": "HIGH",
+    "Web Attack - Brute Force": "HIGH",
+    "XSS": "MEDIUM",
+    "SQL Injection": "CRITICAL",
+    "Infiltration": "CRITICAL",
+    "Bot": "HIGH",
+    "Heartbleed": "HIGH",
+    "Exploit": "CRITICAL",
+    "Fuzzer": "MEDIUM",
+    "Reconnaissance": "LOW",
+    "Analysis": "LOW",
+    "Backdoor": "CRITICAL",
+    "Shellcode": "CRITICAL",
+    "Worms": "CRITICAL",
+    "UNKNOWN": "HIGH",
+    "Known Malicious": "CRITICAL",
+    "Suspicious": "HIGH",
+    "Trusted": "LOW",
+    "Legitimate": "LOW",
 }
 
-# Fallback for any label neither the default map nor a caller-supplied
-# override has an entry for, so get_severity() never raises on an
-# unexpected string - it degrades to a safe, visible default instead.
-FALLBACK_SEVERITY: str = Severity.MEDIUM
-
-_ENV_VAR_CONFIG_PATH = "SEVERITY_CONFIG_PATH"
-
-
-def load_severity_overrides(config_path: Optional[str | Path] = None) -> dict[str, str]:
-    """
-    Load a JSON file of {"AttackLabel": "Severity"} overrides, e.g.:
-
-        {"Port Scan": "High", "Bot": "Critical"}
-
-    Args:
-        config_path: Path to the override file. If not given, falls back
-            to the `SEVERITY_CONFIG_PATH` environment variable. If neither
-            is set, returns an empty dict (defaults only).
-
-    Returns:
-        The parsed override dict (empty if no config path is configured).
-    """
-    resolved = config_path or os.environ.get(_ENV_VAR_CONFIG_PATH)
-    if not resolved:
-        return {}
-
-    path = Path(resolved)
-    if not path.is_file():
-        logger.warning("Severity config path '%s' does not exist; using defaults only", path)
-        return {}
-
-    overrides = json.loads(path.read_text())
-    logger.info("Loaded %d severity override(s) from %s", len(overrides), path)
-    return overrides
+# Severity to numeric score (0-1)
+SEVERITY_TO_SCORE = {
+    "LOW": 0.2,
+    "MEDIUM": 0.4,
+    "HIGH": 0.7,
+    "CRITICAL": 1.0,
+}
 
 
-def build_severity_map(config_path: Optional[str | Path] = None) -> dict[str, str]:
-    """Merge DEFAULT_SEVERITY_MAP with any configured overrides (overrides win)."""
-    merged = dict(DEFAULT_SEVERITY_MAP)
-    merged.update(load_severity_overrides(config_path))
-    return merged
+def get_severity(attack_type: str, severity_map: dict[str, str] | None = None) -> str:
+    """Get severity level for an attack type."""
+    mapping = severity_map if severity_map is not None else ATTACK_SEVERITY_MAP
+    return mapping.get(attack_type, "MEDIUM")
 
 
-def get_severity(attack_label: str, severity_map: Optional[dict[str, str]] = None) -> str:
-    """
-    Return the severity for a single attack label.
+def get_severity_score(severity: str) -> float:
+    """Get numeric score (0-1) for a severity level."""
+    return {"LOW": 0.2, "MEDIUM": 0.4, "HIGH": 0.7, "CRITICAL": 1.0}.get(severity, 0.4)
 
-    Args:
-        attack_label: The predicted attack type, e.g. "DoS", "BENIGN".
-        severity_map: Mapping to use. Defaults to DEFAULT_SEVERITY_MAP if
-            not given - pass build_severity_map() explicitly to include
-            any configured overrides.
 
-    Returns:
-        One of Severity.LOW/MEDIUM/HIGH/CRITICAL. Never raises - an
-        unmapped label logs a warning and returns FALLBACK_SEVERITY.
-    """
-    mapping = severity_map if severity_map is not None else DEFAULT_SEVERITY_MAP
-    if attack_label not in mapping:
-        logger.warning("No severity mapping for attack label '%s'; defaulting to %s", attack_label, FALLBACK_SEVERITY)
-        return FALLBACK_SEVERITY
-    return mapping[attack_label]
+def get_severity_color(severity: str) -> str:
+    """Get CSS color class for severity level."""
+    return {
+        "LOW": "text-green-500",
+        "MEDIUM": "text-yellow-500",
+        "HIGH": "text-orange-500",
+        "CRITICAL": "text-red-500",
+    }.get(severity, "text-gray-500")
+
+
+def severity_to_risk_score(severity: str) -> int:
+    """Convert severity to base risk score (0-100)."""
+    return {
+        "LOW": 15,
+        "MEDIUM": 40,
+        "HIGH": 70,
+        "CRITICAL": 95,
+    }.get(severity, 40)
+
+
+def get_risk_level(risk_score: int) -> str:
+    """Convert risk score (0-100) to risk level."""
+    if risk_score <= 20:
+        return "LOW"
+    elif risk_score <= 40:
+        return "GUARDED"
+    elif risk_score <= 60:
+        return "MEDIUM"
+    elif risk_score <= 80:
+        return "HIGH"
+    else:
+        return "CRITICAL"
+
+
+def get_risk_color(risk_level: str) -> str:
+    """Get CSS color class for risk level."""
+    return {
+        "LOW": "text-green-500",
+        "GUARDED": "text-blue-500",
+        "MEDIUM": "text-yellow-500",
+        "HIGH": "text-orange-500",
+        "CRITICAL": "text-red-500",
+    }.get(risk_level, "text-gray-500")
+
+
+if __name__ == "__main__":
+    print("Severity module loaded successfully")

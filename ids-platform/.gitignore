@@ -1,0 +1,194 @@
+# SOC Platform - Git Ignore Rules
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env
+.env.*
+
+# Build artifacts
+dist/
+build/
+build/
+release/
+*.exe
+*.msi
+*.dmg
+*.app
+*.dylib
+
+# Python cache
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Test and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+htmlcov/
+
+# Type checking
+.mypy_cache/
+*.pyc
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Model files
+*.pkl
+*.joblib
+*.pickle
+*.model
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+
+# Model directories
+models/
+models/**/
+*.pkl
+*.joblib
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.eslintcache
+frontend/.turbo/
+frontend/.vercel/
+
+# Desktop
+desktop/dist/
+desktop/build/
+desktop/release/
+desktop/node_modules/
+
+# Backend
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/*.db
+backend/*.sqlite
+
+# Desktop
+desktop/dist/
+desktop/build/
+desktop/release/
+desktop/node_modules/
+desktop/.vite/
+
+# Vite
+.vite/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Vite
+.vite/
+
+# Electron
+desktop/release/
+desktop/dist/
+
+# Test coverage
+htmlcov/
+.coverage
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# IDE
+*.swp
+*.swo
+*~
+
+# Editors
+*.sublime-project
+*.sublime-workspace
+
+# Profiling
+*.prof
+*.profraw
+
+# Coverage
+coverage.xml
+*.lcov
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Package
+*.egg
+*.egg-info/
+
+# Packaging
+*.whl
+*.tar.gz
+*.zip

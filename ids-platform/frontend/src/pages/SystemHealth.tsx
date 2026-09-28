@@ -5,6 +5,10 @@ import { TelemetryCard, formatBytes } from "../components/system/TelemetryCard";
 import { useTelemetrySeries } from "../components/system/useTelemetrySeries";
 import { CardSkeleton } from "../components/common/LoadingSkeleton";
 import { ErrorState } from "../components/common/ErrorState";
+import { DeploymentMetricsCard } from "../components/system/DeploymentMetricsCard";
+import { RiskDistributionChart } from "../components/charts/RiskDistributionChart";
+import { SeverityBreakdownChart } from "../components/charts/SeverityBreakdownChart";
+import { ThreatTagDistributionChart } from "../components/charts/ThreatTagDistributionChart";
 
 const CPU_COLOR = "#22d3ee";
 const MEMORY_COLOR = "#a78bfa";
@@ -133,6 +137,15 @@ export default function SystemHealth() {
             )}
           </div>
         )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <DeploymentMetricsCard />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <RiskDistributionChart />
+          <SeverityBreakdownChart />
+          <ThreatTagDistributionChart />
+        </div>
       </div>
 
       <div className="rounded-xl border border-border bg-surface-raised p-4">

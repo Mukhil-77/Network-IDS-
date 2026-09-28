@@ -1,6 +1,7 @@
 import type { AlertRow, AlertFilters } from "../../types/alert";
 import { SeverityBadge, StatusBadge } from "../common/Badge";
 import { formatTimestamp } from "../../utils/formatters";
+import { SHAPExplanationCard } from "./SHAPExplanationCard";
 
 function threatTagBg(tag: string) {
   switch (tag) {
@@ -28,6 +29,21 @@ function threatTagFg(tag: string) {
   }
 }
 
+function priorityBg(priority: string) {
+  switch (priority) {
+    case "P1_CRITICAL":
+      return "bg-red-100 text-red-800";
+    case "P2_HIGH":
+      return "bg-orange-100 text-orange-800";
+    case "P3_MEDIUM":
+      return "bg-yellow-100 text-yellow-800";
+    case "P4_LOW":
+      return "bg-slate-100 text-slate-800";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
 interface AlertsTableProps {
   alerts: AlertRow[];
   sortBy: AlertFilters["sort_by"];
@@ -45,6 +61,8 @@ const COLUMNS: ColumnDef[] = [
   { key: null, label: "Attack Type" },
   { key: "severity", label: "Severity" },
   { key: "confidence", label: "Confidence" },
+  { key: "risk_score", label: "Risk" },
+  { key: "priority", label: "Priority" },
   { key: null, label: "Source IP" },
   { key: null, label: "Destination IP" },
   { key: null, label: "Protocol" },
@@ -93,6 +111,16 @@ export function AlertsTable({ alerts, sortBy, sortDesc, onSortChange }: AlertsTa
                 <SeverityBadge severity={alert.severity} />
               </td>
               <td className="px-4 py-2.5 font-mono text-slate-300">{alert.confidence.toFixed(1)}%</td>
+              <td className="px-4 py-2.5 font-mono text-slate-300">{alert.risk_score}</td>
+              <td className="px-4 py-2.5">
+                {alert.priority && (
+                  <span
+                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${priorityBg(alert.priority)}`}
+                  >
+                    {alert.priority}
+                  </span>
+                )}
+              </td>
               <td className="px-4 py-2.5 font-mono text-slate-300">{alert.source_ip}</td>
               <td className="px-4 py-2.5 font-mono text-slate-300">{alert.destination_ip}</td>
               <td className="px-4 py-2.5 text-slate-400">{alert.protocol}</td>
