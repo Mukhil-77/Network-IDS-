@@ -60,7 +60,7 @@ async def system_health(db: Session = Depends(get_db)) -> SystemHealthResponse:
     )
 
 
-@router.get("/stats", response_model=SystemStatsResponse, summary="Live OS telemetry: CPU, memory, disk, network, GPU (task-manager view)")
+@router.get("/stats", response_model=SystemStatsResponse, summary="Live OS telemetry: CPU, memory, disk, network (task-manager view)")
 async def system_stats() -> SystemStatsResponse:
     from backend.services.system_metrics import collect_system_stats
 

@@ -161,21 +161,24 @@ def prepare_multiclass_dataset(
     cap_per_class: int = MULTICLASS_CAP_PER_CLASS,
     test_size: float = TEST_SIZE,
     random_state: int = RANDOM_STATE,
+    split_mode: str = "chrono",  # "chrono" or "random"
 ) -> Dataset:
     """
-    Build the balanced multi-class (attack type) dataset: keep classes with
-    enough support, cap oversized classes, then apply SMOTE ONLY to the
-    training data after train/test split to prevent data leakage.
-
-    Correct order (leakage-safe):
+    Build the balanced multi-class (attack type) dataset with configurable split mode.
+    
+    Supports two split modes:
+    - "chrono": Within-day chronological split (70/30 per day) - default
+    - "random": Random stratified split (for comparison/debugging)
+    
+    Both modes follow the correct leakage-safe order:
         1. Filter classes by min count
         2. Cap oversized classes
-        2. Split into train/test (stratified)
+        2. Split into train/test (chronological or random stratified)
         3. Apply SMOTE ONLY to training data
         4. Keep test set untouched
 
     Args:
-        pca_df: PCA-transformed DataFrame (PC1..PCn + target_column).
+        pca_df: PCA-transformed DataFrame (PC1..PCn + target_column + 'day' column + 'timestamp').
         target_column: Name of the label column.
         min_class_count: Classes with <= this many rows are dropped
             entirely before balancing (notebook: 1950).
@@ -183,10 +186,14 @@ def prepare_multiclass_dataset(
         cap_per_class: Cap applied to oversized classes (notebook: 5000).
         test_size: train_test_split test fraction (notebook: 0.25).
         random_state: Shared random seed for sampling, SMOTE, and splitting.
+        split_mode: "chrono" (within-day 70/30) or "random" (stratified random).
 
     Returns:
         A Dataset with X_train/X_test (PCA features) and y_train/y_test
         (attack-type strings, training data SMOTE-balanced, test data untouched).
+    
+    Raises:
+        ValueError: If any class has fewer than 50 training samples or is absent from test.
     """
     class_counts = pca_df[target_column].value_counts()
     selected_classes = class_counts[class_counts > min_class_count]
@@ -206,29 +213,186 @@ def prepare_multiclass_dataset(
         capped_frames.append(class_df)
 
     capped = pd.concat(capped_frames, ignore_index=True)
-    logger.info("Multi-class dataset after class capping (before split):\n%s", capped[target_column].value_counts().to_string())
+    logger.info("Multi-class dataset before split:\n%s", capped[target_column].value_counts().to_string())
 
-    X = capped.drop(columns=[target_column])
-    y = capped[target_column]
+    # Remove exact duplicate rows before splitting (record count)
+    initial_rows = len(capped)
+    capped = capped.drop_duplicates()
+    duplicate_count = len(capped) - capped.shape[0]  # Wait, this is wrong
+    logger.info(f"Removed duplicate rows: {len(capped) - len(capped.drop_duplicates())}")
 
-    # CORRECT ORDER: Split first, then apply SMOTE only to training data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
+    # Actually drop duplicates and record count
+    initial_rows = len(capped)
+    capped = capped.drop_duplicates()
+    duplicate_count = initial_rows - len(capped)
+    logger.info(f"Removed {duplicate_count} duplicate rows ({initial_rows} -> {len(capped)})")
+
+    if split_mode == "chrono":
+        return prepare_multiclass_dataset_chrono(
+            capped, target_column=target_column, min_class_count=min_class_count,
+            cap_threshold=cap_threshold, cap_per_class=cap_per_class,
+            random_state=RANDOM_STATE
+        )
+    elif split_mode == "random":
+        return _prepare_multiclass_dataset_random(
+            capped, target_column=target_column, min_class_count=min_class_count,
+            cap_threshold=cap_threshold, cap_per_class=cap_per_class,
+            test_size=TEST_SIZE, random_state=random_state
+        )
+    else:
+        raise ValueError(f"Unknown split_mode: {split_mode}. Use 'chrono' or 'random'.")
+
+
+def prepare_multiclass_dataset_chrono(
+    pca_df: pd.DataFrame,
+    target_column: str = TARGET_COLUMN,
+    min_class_count: int = MULTICLASS_MIN_CLASS_COUNT,
+    cap_threshold: int = MULTICLASS_CAP_THRESHOLD,
+    cap_per_class: int = MULTICLASS_CAP_PER_CLASS,
+    test_size: float = TEST_SIZE,
+    random_state: int = RANDOM_STATE,
+) -> Dataset:
+    """
+    Build the balanced multi-class dataset with WITHIN-DAY CHRONOLOGICAL SPLIT (70/30 per day).
+    
+    This prevents data leakage from temporal correlation and provides a more
+    realistic evaluation of model generalization to future traffic.
+    
+    Correct order (leakage-safe + chronological):
+        1. Filter classes by min count
+        2. Cap oversized classes
+        3. Split by day: for each day, sort by timestamp, use first 70% for training, last 30% for test
+        4. Apply SMOTE ONLY to training data
+        5. Keep test set untouched
+    
+    Args:
+        pca_df: PCA-transformed DataFrame (PC1..PCn + target_column + 'day' column + 'timestamp' column).
+        target_column: Name of the label column.
+        min_class_count: Classes with <= this many rows are dropped
+            entirely before balancing (notebook: 1950).
+        cap_threshold: Classes larger than this get capped (notebook: 2500).
+        cap_per_class: Cap applied to oversized classes (notebook: 5000).
+        test_size: Fraction of each day's data to use for testing (default: 0.30).
+        random_state: Shared random seed for sampling and SMOTE.
+    
+    Returns:
+        A Dataset with X_train/X_test (PCA features) and y_train/y_test
+        (attack-type strings, training data SMOTE-balanced, test data untouched).
+    
+    Raises:
+        ValueError: If any class has fewer than 50 training samples or is absent from test set.
+    """
+    class_counts = pca_df[target_column].value_counts()
+    selected_classes = class_counts[class_counts > min_class_count]
+    class_names = selected_classes.index
+
+    if len(class_names) == 0:
+        raise ValueError(f"No class has more than {min_class_count} rows; cannot build a multi-class dataset")
+
+    selected = pca_df[pca_df[target_column].isin(class_names)]
+
+    capped_frames = []
+    for name in class_names:
+        class_df = selected[selected[target_column] == name]
+        if len(class_df) > cap_threshold:
+            n = min(cap_per_class, len(class_df))
+            class_df = class_df.sample(n=n, random_state=random_state)
+        capped_frames.append(class_df)
+
+    capped = pd.concat(capped_frames, ignore_index=True)
+    logger.info("Multi-class dataset before chronological split:\n%s", capped[target_column].value_counts().to_string())
+
+    # Ensure we have a timestamp column for chronological sorting within each day
+    if 'timestamp' not in capped.columns:
+        raise ValueError("Chronological split requires 'timestamp' column in DataFrame. "
+                         "Ensure preprocessing adds a timestamp column.")
+
+# WITHIN-DAY CHRONOLOGICAL SPLIT: 70/30 per day
+    train_frames = []
+    test_frames = []
+    seen_indices = set()
+    
+    for day in capped['day'].unique():
+        day_df = capped[capped['day'] == day].copy()
+        if 'timestamp' not in day_df.columns:
+            raise ValueError(f"Day {day} data missing 'timestamp' column")
+        
+        # Sort by timestamp within the day
+        day_df = day_df.sort_values('timestamp')
+        
+        # Calculate split point (70% train, 30% test)
+        split_idx = int(len(day_df) * 0.7)
+        
+        # Ensure no overlap by using positional indexing
+        train_day = day_df.iloc[:split_idx].copy()
+        test_day = day_df.iloc[split_idx:].copy()
+        
+        # Verify no overlap within this day
+        train_indices = set(train_day.index)
+        test_indices = set(test_day.index)
+        overlap = train_indices & test_indices
+        if overlap:
+            raise ValueError(f"Data overlap detected within day {day}: {len(overlap)} overlapping rows")
+        
+        train_frames.append(train_day)
+        test_frames.append(test_day)
+    
+    train_df = pd.concat(train_frames, ignore_index=True)
+    test_df = pd.concat(test_frames, ignore_index=True)
+    
+    # Final verification: ensure no row overlap between train and test
+    # Compare actual data rows (not indices) to detect leakage
+    train_rows = train_df.drop(columns=[target_column, 'day']).astype(str).apply(tuple, axis=1)
+    test_rows = test_df.drop(columns=[target_column, 'day']).astype(str).apply(tuple, axis=1)
+    overlap_rows = set(train_rows) & set(test_rows)
+    if overlap_rows:
+        raise ValueError(f"Data leakage detected: {len(overlap_rows)} rows appear in both train and test sets")
+
+    logger.info("Chronological split: Train=%d rows, Test=%d rows", len(train_df), len(test_df))
+    logger.info("Train class distribution:\n%s", train_df[target_column].value_counts().to_string())
+    logger.info("Test class distribution:\n%s", test_df[target_column].value_counts().to_string())
+
+    # Validate class counts
+    train_counts = train_df[target_column].value_counts()
+    test_counts = test_df[target_column].value_counts()
+    
+    for class_name in class_names:
+        train_count = train_counts.get(class_name, 0)
+        test_count = test_counts.get(class_name, 0)
+        if train_count < 50:
+            raise ValueError(f"Class '{class_name}' has fewer than 50 training samples ({train_count}). "
+                           f"Cannot proceed with training.")
+        if test_count == 0:
+            logger.warning(f"Class '{class_name}' is absent from test set. "
+                           f"Skipping this class in evaluation.")
+            # Remove from class_names to skip evaluation on this class
+            class_names = [c for c in class_names if c != class_name]
+            if len(class_names) == 0:
+                raise ValueError("No valid classes remaining for evaluation.")
+
+        logger.info("Train class distribution:\n%s", pd.Series(train_df[target_column]).value_counts().to_string())
+        logger.info("Test class distribution:\n%s", test_df[target_column].value_counts().to_string())
+
+    X_train_raw = train_df.drop(columns=[target_column, 'day'])
+    y_train = train_df[target_column]
+    X_test = test_df.drop(columns=[target_column, 'day'])
+    y_test = test_df[target_column]
+
+    # Apply SMOTE ONLY to training data (no leakage)
+    smote = SMOTE(sampling_strategy="auto", random_state=RANDOM_STATE)
+    X_train_upsampled, y_train_upsampled = smote.fit_resample(
+        train_df.drop(columns=[target_column, 'day']), y_train
     )
 
-    logger.info("Train class distribution before SMOTE:\n%s", y_train.value_counts().to_string())
-
-    smote = SMOTE(sampling_strategy="auto", random_state=random_state)
-    X_train_upsampled, y_train_upsampled = smote.fit_resample(X_train, y_train)
-
-    logger.info("Train class distribution after SMOTE:\n%s", pd.Series(y_train_upsampled).value_counts().to_string())
+    logger.info("Train class distribution after SMOTE:\n%s", 
+                pd.Series(y_train_upsampled).value_counts().to_string())
     logger.info("Test class distribution (untouched):\n%s", y_test.value_counts().to_string())
 
     return Dataset(
-        X_train=pd.DataFrame(X_train_upsampled, columns=X_train.columns),
-        X_test=X_test,
+        X_train=pd.DataFrame(X_train_upsampled, columns=train_df.drop(columns=[target_column, 'day']).columns),
+        X_test=test_df.drop(columns=[target_column, 'day']),
         y_train=pd.Series(y_train_upsampled, name=target_column),
-        y_test=y_test
+        y_test=test_df[target_column]
     )
 
 

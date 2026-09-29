@@ -222,13 +222,6 @@ class ProcessStatsSchema(BaseModel):
     threads: int
 
 
-class GpuStatsSchema(BaseModel):
-    name: str
-    utilization_percent: float
-    memory_used_mb: float
-    memory_total_mb: float
-
-
 class SystemStatsResponse(BaseModel):
     """GET /system/stats - one point-in-time OS telemetry snapshot."""
 
@@ -238,7 +231,6 @@ class SystemStatsResponse(BaseModel):
     disk: DiskStatsSchema
     network: NetworkStatsSchema
     process: ProcessStatsSchema
-    gpu: Optional[GpuStatsSchema] = None
 
 
 # ---------------------------------------------------------------------------

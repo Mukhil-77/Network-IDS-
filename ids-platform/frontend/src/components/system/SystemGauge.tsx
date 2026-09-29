@@ -7,7 +7,7 @@ interface SystemGaugeProps {
 
 /**
  * Circular progress gauge for the task-manager cards (CPU / memory / disk /
- * GPU utilization). Shows the percentage as its value text by default.
+ * utilization). Shows the percentage as its value text by default.
  */
 export function SystemGauge({ percent, color, size = 84, label }: SystemGaugeProps) {
   const clamped = Math.max(0, Math.min(100, percent));

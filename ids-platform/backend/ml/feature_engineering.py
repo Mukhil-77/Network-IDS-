@@ -147,6 +147,7 @@ def transform_with_pca(
     scaled_features: np.ndarray,
     target: Optional[pd.Series] = None,
     target_column: str = TARGET_COLUMN,
+    extra_columns: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Project standardized features into PCA space and return them as a
@@ -163,10 +164,12 @@ def transform_with_pca(
         target: Optional target Series to attach as `target_column`. Pass
             None for inference, where there is no label yet.
         target_column: Name to give the re-attached label column.
+        extra_columns: Optional DataFrame with additional columns to preserve
+            (e.g., timestamp, day) that should pass through without PCA.
 
     Returns:
         DataFrame with columns PC1..PCn (+ `target_column` if `target` was
-        given).
+        given) plus any extra columns.
     """
     transformed = ipca.transform(scaled_features)
     columns = pca_column_names(ipca.n_components_)
@@ -174,6 +177,12 @@ def transform_with_pca(
 
     if target is not None:
         result[target_column] = target.values
+
+    if extra_columns is not None:
+        # Preserve extra columns (e.g., timestamp, day) by aligning on index
+        for col in extra_columns.columns:
+            if col not in result.columns:
+                result[col] = extra_columns[col].values
 
     return result
 
@@ -214,10 +223,11 @@ class FeatureEngineer:
         X: pd.DataFrame,
         target: Optional[pd.Series] = None,
         target_column: str = TARGET_COLUMN,
+        extra_columns: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Scale then PCA-transform a feature matrix, returning a labeled DataFrame."""
         scaled = scale_features(self.scaler, X)
-        return transform_with_pca(self.pca, scaled, target=target, target_column=target_column)
+        return transform_with_pca(self.pca, scaled, target=target, target_column=target_column, extra_columns=extra_columns)
 
     @property
     def feature_names(self) -> list[str]:

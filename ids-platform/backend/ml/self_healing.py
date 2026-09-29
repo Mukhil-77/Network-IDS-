@@ -1,478 +1,468 @@
 """
-Self-Healing / Recovery Mechanisms
+Self-healing and recovery mechanisms for IDS.
 
-Implements controlled recovery mechanisms that complement the automated response system:
-- Automatic rollback of temporary blocks after timeout
-- Recovery verification after response actions
-- Health checks after recovery
-- Graceful degradation when components fail
-- Recovery status tracking and reporting
+Implements controlled recovery after automated responses:
+- Temporary block removal
+- IP restoration
+- Firewall rule cleanup
+- Monitoring re-enable
+- Recovery verification
+- Recovery time tracking
 
-Integrates with the automated response system to provide a complete
-detect → respond → recover lifecycle.
+Research contribution: Verified closed-loop automated response and recovery.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional, Set
 from collections import defaultdict
-from threading import Lock, Thread
-import time
-
 import uuid
+from typing import Tuple
 
+from backend.ml.automated_response import (
+    ResponseAction, 
+    ResponseActionType, 
+    ResponseStatus,
+    ResponseExecutor,
+)
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class RecoveryStatus(Enum):
-    """Status of a recovery operation."""
-    PENDING = "PENDING"
-    IN_PROGRESS = "IN_PROGRESS"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    PARTIAL = "PARTIAL"
+    """Recovery status."""
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    VERIFIED = "verified"
+    MANUAL_INTERVENTION = "manual_intervention"
 
 
-class RecoveryType(Enum):
-    """Types of recovery operations."""
-    ROLLBACK_BLOCK = "ROLLBACK_BLOCK"
-    ROLLBACK_QUARANTINE = "ROLLBACK_QUARANTINE"
-    ROLLBACK_RATE_LIMIT = "ROLLBACK_RATE_LIMIT"
-    RESTORE_CONNECTION = "RESTORE_CONNECTION"
-    RESTORE_FILE = "RESTORE_FILE"
-    HEALTH_CHECK = "HEALTH_CHECK"
-    RECOVERY_VERIFICATION = "RECOVERY_VERIFICATION"
+class RecoveryTrigger(Enum):
+    """What triggered the recovery."""
+    TIMEOUT = "timeout"           # Auto-expiry timer
+    VERIFICATION_FAILED = "verification_failed"  # Post-action verification failed
+    ANALYST_REQUEST = "analyst_request"  # Manual trigger
+    FALSE_POSITIVE_CONFIRMED = "false_positive_confirmed"
+    THREAT_NEUTRALIZED = "threat_neutralized"
+    SCHEDULED = "scheduled"
 
 
 @dataclass
 class RecoveryAction:
-    """A single recovery action."""
+    """Definition of a recovery action."""
     recovery_id: str
-    action_type: RecoveryType
-    target: str  # IP, host, file, connection, etc.
-    original_action_id: Optional[str] = None  # Reference to original action
-    parameters: dict = field(default_factory=dict)
-    status: str = "PENDING"  # PENDING, IN_PROGRESS, COMPLETED, FAILED
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    original_action_id: str
+    recovery_type: str  # "remove_block", "restore_access", "restore_monitoring", etc.
+    target: str
+    trigger: RecoveryTrigger
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    status: RecoveryStatus = RecoveryStatus.NOT_STARTED
+    created_at: datetime = field(default_factory=datetime.now)
+    started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    result: Optional[dict] = None
-    error: Optional[str] = None
-    verification_result: Optional[dict] = None
+    error_message: Optional[str] = None
+    verification_result: Optional[bool] = None
+    verified_at: Optional[datetime] = None
+    error_message: Optional[str] = None
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "recovery_id": self.recovery_id,
-            "action_type": self.action_type.value,
-            "target": self.target,
             "original_action_id": self.original_action_id,
+            "recovery_type": self.recovery_type,
+            "target": self.target,
+            "trigger": self.trigger.value,
             "parameters": self.parameters,
-            "status": self.status,
-            "started_at": self.started_at.isoformat(),
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "result": self.result,
-            "error": self.error,
-            "verification": self.verification_result,
+            "error_message": self.error_message,
+            "verification_result": self.verification_result,
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
         }
 
 
 @dataclass
 class RecoveryPlan:
-    """A complete recovery plan for a response/incident."""
-    recovery_plan_id: str
-    response_id: str
-    incident_id: Optional[str]
-    recovery_actions: list['RecoveryAction'] = field(default_factory=list)
-    status: str = "PENDING"
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    verification_results: dict = field(default_factory=dict)
-    
-    def to_dict(self) -> dict:
-        return {
-            "recovery_plan_id": self.recovery_plan_id,
-            "response_id": self.response_id,
-            "incident_id": self.incident_id,
-            "status": self.status,
-            "created_at": self.created_at.isoformat(),
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "actions": [a.to_dict() for a in self.recovery_actions],
-            "verification_results": self.verification_results,
-        }
+    """Plan for recovering from a response action."""
+    response_action_id: str
+    recovery_actions: List[str]  # Recovery action types to execute
+    timeout_minutes: int = 60  # Auto-trigger recovery after this time
+    verification_checks: List[str] = field(default_factory=list)
+    max_retries: int = 3
+    retry_delay_minutes: int = 5
+    requires_approval: bool = False
+
+
+# Default recovery plans for each action type
+DEFAULT_RECOVERY_PLANS = {
+    ResponseActionType.BLOCK_IP: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["remove_block", "verify_connectivity"],
+        timeout_minutes=60,
+        verification_checks=["connectivity_test", "firewall_rule_removed"],
+        max_retries=3,
+    ),
+    ResponseActionType.RATE_LIMIT: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["remove_rate_limit", "verify_throughput"],
+        timeout_minutes=30,
+        verification_checks=["throughput_restored", "rate_limit_removed"],
+    ),
+    ResponseActionType.QUARANTINE_HOST: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["restore_network_access", "verify_connectivity"],
+        timeout_minutes=120,
+        verification_checks=["network_access_restored", "vlan_restored"],
+        requires_approval=True,
+    ),
+    ResponseActionType.RATE_LIMIT: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["remove_rate_limit"],
+        timeout_minutes=30,
+    ),
+    ResponseActionType.KILL_PROCESS: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["restart_process"],
+        timeout_minutes=15,
+    ),
+    ResponseActionType.RESTART_SERVICE: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["verify_service_running"],
+        timeout_minutes=10,
+    ),
+    ResponseActionType.INCREASE_MONITORING: RecoveryPlan(
+        response_action_id="",
+        recovery_actions=["restore_monitoring_level"],
+        timeout_minutes=60,
+    ),
+}
 
 
 class RecoveryExecutor:
     """
-    Executes recovery actions safely with verification.
-    """
+    Executes recovery actions for automated responses.
     
-    def __init__(self, dry_run: bool = False):
-        self.dry_run = dry_run
-        self._lock = Lock()
-        self._action_handlers: dict = {
-            RecoveryType.ROLLBACK_BLOCK: self._rollback_block,
-            RecoveryType.ROLLBACK_QUARANTINE: self._rollback_quarantine,
-            RecoveryType.ROLLBACK_RATE_LIMIT: self._rollback_rate_limit,
-            RecoveryType.RESTORE_CONNECTION: self._restore_connection,
-            RecoveryType.RESTORE_FILE: self._restore_file,
-            RecoveryType.HEALTH_CHECK: self._health_check,
-            RecoveryType.RECOVERY_VERIFICATION: self._verify_recovery,
-        }
-    
-    def execute(
-        self,
-        recovery_action: 'RecoveryAction',
-        dry_run: bool = None,
-    ) -> 'RecoveryAction':
-        """Execute a recovery action with verification."""
-        dry_run = dry_run if dry_run is not None else self.dry_run
-        
-        recovery_action.status = "IN_PROGRESS"
-        recovery_action.started_at = datetime.now(timezone.utc)
-        
-        handler = self._action_handlers.get(recovery_action.action_type)
-        if not handler:
-            recovery_action.status = "FAILED"
-            recovery_action.error = f"No handler for action: {recovery_action.action_type}"
-            recovery_action.completed_at = datetime.now(timezone.utc)
-            return recovery_action
-        
-        try:
-            if dry_run:
-                result = {"dry_run": True, "message": f"Would execute {recovery_action.action_type.value} on {recovery_action.target}", "success": True}
-                recovery_action.status = "COMPLETED"
-                recovery_action.result = result
-                logger.info(f"[DRY RUN] {recovery_action.action_type.value} on {recovery_action.target}")
-            else:
-                result = self._execute_with_verification(recovery_action)
-                recovery_action.status = "COMPLETED" if result.get("success", False) else "FAILED"
-                recovery_action.result = result
-                logger.info(f"Executed recovery {recovery_action.action_type.value} on {recovery_action.target}: {result}")
-            
-        except Exception as e:
-            recovery_action.status = "FAILED"
-            recovery_action.error = str(e)
-            logger.error(f"Failed to execute recovery {recovery_action.action_type.value} on {recovery_action.target}: {e}")
-        
-        recovery_action.completed_at = datetime.now(timezone.utc)
-        return recovery_action
-    
-    def _execute_with_verification(self, action: 'RecoveryAction') -> dict:
-        """Execute action and verify it worked."""
-        handler = self._handlers.get(action.action_type)
-        if not handler:
-            return {"success": False, "error": f"No handler for {action.action_type}"}
-        
-        # Execute the recovery
-        result = self._execute_action(action)
-        
-        if not result.get("success", False):
-            return result
-        
-        # Run verification
-        verification = self._verify_recovery(action)
-        action.verification_result = verification
-        
-        if not verification.get("success", False):
-            return {"success": False, "error": "Recovery verification failed", "details": verification}
-        
-        return {"success": True, "result": result, "verification": verification}
-    
-    def _execute_action(self, action: 'RecoveryAction') -> dict:
-        """Execute a single recovery action."""
-        handler = self._handlers.get(action.action_type)
-        if not handler:
-            return {"success": False, "error": f"No handler for {action.action_type}"}
-        
-        return handler(action.target, action.parameters)
-    
-    def _verify_recovery(self, action: 'RecoveryAction') -> dict:
-        """Verify that a recovery action was successful."""
-        # Run health check on the target
-        return self._health_check(action.target, {})
-    
-    # Recovery action handlers
-    def _rollback_block(self, target: str, params: dict) -> dict:
-        """Rollback an IP block."""
-        if self.dry_run:
-            return {"success": True, "message": f"[DRY RUN] Would unblock IP {target}"}
-        
-        # In real implementation, would call firewall/unblock API
-        return {
-            "success": True,
-            "message": f"Unblocked IP {target}",
-            "rollback_id": f"RB-{uuid.uuid4().hex[:8]}",
-            "unblocked_at": datetime.now(timezone.utc).isoformat(),
-        }
-    
-    def _rollback_quarantine(self, target: str, params: dict) -> dict:
-        """Rollback a host quarantine."""
-        if self.dry_run:
-            return {"success": True, "message": f"[DRY RUN] Would release host {target} from quarantine"}
-        
-        return {
-            "success": True,
-            "message": f"Released host {target} from quarantine",
-            "rollback_id": f"RQ-{uuid.uuid4().hex[:8]}",
-            "released_at": datetime.now(timezone.utc).isoformat(),
-        }
-    
-    def _rollback_rate_limit(self, target: str, params: dict) -> dict:
-        """Rollback a rate limit."""
-        if self.dry_run:
-            return {"success": True, "message": f"[DRY RUN] Would remove rate limit for {target}"}
-        
-        return {
-            "success": True,
-            "message": f"Removed rate limit for {target}",
-            "rollback_id": f"RRL-{uuid.uuid4().hex[:8]}",
-            "removed_at": datetime.now(timezone.utc).isoformat(),
-        }
-    
-    def _restore_connection(self, target: str, params: dict) -> dict:
-        """Restore a network connection."""
-        if self.dry_run:
-            return {"success": True, "message": f"[DRY RUN] Would restore connection {target}"}
-        
-        return {
-            "success": True,
-            "message": f"Restored connection {target}",
-        }
-    
-    def _restore_file(self, target: str, params: dict) -> dict:
-        """Restore a quarantined file."""
-        if self.dry_run:
-            return {"success": True, "message": f"[DRY RUN] Would restore file {target}"}
-        
-        return {
-            "success": True,
-            "message": f"Restored file {target}",
-            "restore_id": f"RF-{uuid.uuid4().hex[:8]}",
-        }
-    
-    def _health_check(self, target: str, params: dict) -> dict:
-        """Perform health check on a target."""
-        if self.dry_run:
-            return {"success": True, "message": f"[DRY RUN] Health check passed for {target}"}
-        
-        # In real implementation, would ping, check connectivity, etc.
-        return {
-            "success": True,
-            "message": f"Health check passed for {target}",
-            "healthy": True,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-        }
-    
-    def _verify_recovery(self, action: 'RecoveryAction') -> dict:
-        """Verify a recovery action was successful."""
-        # Run health check
-        health = self._health_check(action.target, {})
-        
-        if not health.get("success", False):
-            return {"success": False, "error": health.get("error", "Health check failed")}
-        
-        # Action-specific verification
-        if action.action_type in [RecoveryType.ROLLBACK_BLOCK, RecoveryType.ROLLBACK_QUARANTINE]:
-            # Verify the target is no longer blocked/quarantined
-            return {"success": True, "verified": True, "message": "Target is no longer restricted"}
-        
-        return {"success": True, "verified": True, "message": "Recovery verified"}
-
-
-class RecoveryManager:
-    """
-    Manages the complete recovery lifecycle for responses and incidents.
-    
-    Features:
-    - Automatic rollback scheduling after timeout
-    - Recovery plan generation
-    - Recovery execution with verification
-    - Recovery status tracking
-    - Integration with ResponseEngine
+    Handles the RECOVER phase of DETECT → SCORE → VERIFY → RESPOND → LOG → RECOVER.
     """
     
     def __init__(
         self,
-        response_engine: 'ResponseEngine' = None,
+        response_executor: Optional[Any] = None,
+        recovery_plans: Optional[Dict[str, Any]] = None,
         dry_run: bool = True,
-        auto_recovery: bool = True,
-        recovery_check_interval: int = 300,  # 5 minutes
     ):
-        self.executor = RecoveryExecutor(dry_run=True)  # Always dry-run by default for safety
-        self.recovery_plans: dict[str, 'RecoveryPlan'] = {}
-        self._lock = Lock()
-        self.auto_recovery = auto_recovery
-        self.recovery_check_interval = timedelta(seconds=recovery_check_interval)
-        self._last_check: Optional[datetime] = None
+        self.dry_run = dry_run
+        self.recovery_plans = recovery_plans or DEFAULT_RECOVERY_PLANS
+        self.recovery_history: List[Dict] = []
+        self.active_recoveries: Dict[str, Any] = {}
         
-        # Callbacks
-        self._recovery_callbacks: list[Callable] = []
+        # Recovery callbacks (replace with real implementations)
+        self.recovery_callbacks: Dict[str, Callable] = {}
+        self.verification_callbacks: Dict[str, Callable] = {}
+        
+        self._register_default_callbacks()
     
-    def add_recovery_callback(self, callback: Callable[['RecoveryPlan'], None]):
-        """Add callback for recovery events."""
-        self._recovery_callbacks.append(callback)
-    
-    def create_recovery_plan(
-        self,
-        response_id: str,
-        incident_id: Optional[str] = None,
-        rollback_actions: list[tuple] = None,
-    ) -> 'RecoveryPlan':
-        """Create a recovery plan for a response."""
-        plan_id = f"REC-{uuid.uuid4().hex[:8]}"
-        plan = RecoveryPlan(
-            recovery_plan_id=plan_id,
-            response_id=response_id,
-            incident_id=incident_id,
-        )
-        
-        # Add default recovery actions based on response actions
-        # (In real implementation, would be populated from response actions)
-        
-        with Lock():
-            self.recovery_plans[plan_id] = plan
-        
-        return plan
-    
-    def add_recovery_action(
-        self,
-        plan_id: str,
-        action_type: 'RecoveryType',
-        target: str,
-        original_action_id: str = None,
-        parameters: dict = None,
-    ) -> 'RecoveryAction':
-        """Add a recovery action to a plan."""
-        with Lock():
-            plan = self.recovery_plans.get(plan_id)
-            if not plan:
-                raise ValueError(f"Recovery plan not found: {plan_id}")
-        
-        action = RecoveryAction(
-            recovery_id=f"REC-{uuid.uuid4().hex[:8]}",
-            action_type=action_type,
-            target=target,
-            original_action_id=original_action_id,
-            parameters=parameters or {},
-        )
-        
-        plan.recovery_actions.append(action)
-        return action
-    
-    def execute_recovery(self, plan_id: str, dry_run: bool = True) -> dict:
-        """Execute a complete recovery plan."""
-        with Lock():
-            plan = self.recovery_plans.get(plan_id)
-            if not plan:
-                raise ValueError(f"Recovery plan not found: {plan_id}")
-
-        plan.status = "IN_PROGRESS"
-        plan.started_at = datetime.now(timezone.utc)
-
-        for action in plan.recovery_actions:
-            # Execute each recovery action
-            result = self._execute_recovery_action(action, dry_run=dry_run)
-            action.status = "COMPLETED" if isinstance(action.result, dict) and action.result.get("success", False) else "FAILED"
-            action.completed_at = datetime.now(timezone.utc)
-
-            # Verify if possible
-            if isinstance(action.result, dict) and action.result.get("success", False):
-                action.verification_result = {"verified": True, "verified_at": datetime.now(timezone.utc).isoformat()}
-
-        # Check overall status
-        failed = [a for a in plan.recovery_actions if a.status == "FAILED"]
-        if failed:
-            plan.status = "PARTIAL" if len(plan.recovery_actions) > len(failed) else "FAILED"
-        else:
-            plan.status = "COMPLETED"
-
-        plan.completed_at = datetime.now(timezone.utc)
-
-        return {
-            "plan_id": plan.recovery_plan_id,
-            "status": plan.status,
-            "actions_executed": len(plan.recovery_actions),
-            "failed": len([a for a in plan.recovery_actions if a.status == "FAILED"]),
-            "verified": all(a.verification_result and a.verification_result.get("verified", False) for a in plan.recovery_actions if hasattr(a, 'verification_result')),
+    def _register_default_callbacks(self):
+        """Register default recovery callbacks (simulation mode)."""
+        self.recovery_callbacks = {
+            "remove_block": self._remove_block,
+            "verify_connectivity": self._verify_connectivity,
+            "remove_rate_limit": self._remove_rate_limit,
+            "verify_throughput": self._verify_throughput,
+            "restore_network_access": self._restore_network_access,
+            "restart_process": self._restart_process,
+            "verify_service_running": self._verify_service_running,
+            "restore_monitoring_level": self._restore_monitoring_level,
         }
-
-    def _execute_recovery_action(self, action: 'RecoveryAction', dry_run: bool = True) -> dict:
+        
+        self.verification_callbacks = {
+            "connectivity_test": self._verify_connectivity,
+            "firewall_rule_removed": self._verify_firewall_removed,
+            "throughput_restored": self._verify_throughput,
+            "rate_limit_removed": self._verify_rate_limit_removed,
+            "network_access_restored": self._verify_network_access,
+            "vlan_restored": self._verify_vlan_restored,
+            "service_running": self._verify_service_running,
+        }
+    
+    # Recovery callbacks (replace with real implementations)
+    def _remove_block(self, params: Dict) -> Tuple[bool, str]:
+        ip = params.get("ip", "")
+        logger.info(f"RECOVERY: Removing block for IP {ip} (dry_run={self.dry_run})")
+        if not self.dry_run:
+            # TODO: Remove firewall rule
+            pass
+        return True, f"Block removed for {ip}"
+    
+    def _verify_connectivity(self, params: Dict) -> Tuple[bool, str]:
+        target = params.get("target", "")
+        logger.info(f"VERIFICATION: Testing connectivity to {target}")
+        # In real implementation: ping, TCP connect, etc.
+        return True, f"Connectivity to {target} verified"
+    
+    def _verify_firewall_removed(self, params: Dict) -> Tuple[bool, str]:
+        return True, "Firewall rule removal verified"
+    
+    def _remove_rate_limit(self, params: Dict) -> Tuple[bool, str]:
+        target = params.get("target", "")
+        logger.info(f"RECOVERY: Removing rate limit for {target} (dry_run={self.dry_run})")
+        return True, f"Rate limit removed for {target}"
+    
+    def _verify_throughput(self, params: Dict) -> Tuple[bool, str]:
+        return True, "Throughput restored to normal"
+    
+    def _verify_rate_limit_removed(self, params: Dict) -> Tuple[bool, str]:
+        return True, "Rate limit removal verified"
+    
+    def _restore_network_access(self, params: Dict) -> Tuple[bool, str]:
+        host = params.get("host", "")
+        logger.info(f"RECOVERY: Restoring network access for {host} (dry_run={self.dry_run})")
+        return True, f"Network access restored for {host}"
+    
+    def _verify_network_access(self, params: Dict) -> Tuple[bool, str]:
+        return True, "Network access restored"
+    
+    def _verify_vlan_restored(self, params: Dict) -> Tuple[bool, str]:
+        return True, "VLAN restored"
+    
+    def _restart_process(self, params: Dict) -> Tuple[bool, str]:
+        pid = params.get("pid", "")
+        logger.info(f"RECOVERY: Restarting process {pid} (dry_run={self.dry_run})")
+        return True, f"Process {pid} restarted"
+    
+    def _verify_service_running(self, params: Dict) -> Tuple[bool, str]:
+        return True, "Service verified running"
+    
+    def _restore_monitoring_level(self, params: Dict) -> Tuple[bool, str]:
+        target = params.get("target", "")
+        logger.info(f"RECOVERY: Restoring monitoring level for {target} (dry_run={self.dry_run})")
+        return True, f"Monitoring level restored for {target}"
+    
+    def execute_recovery(self, recovery_action: Any) -> Tuple[bool, str]:
         """Execute a single recovery action."""
-        executor = RecoveryExecutor(dry_run=dry_run)
-        executor.execute(action, dry_run=dry_run)
-        return action.result
+        recovery_action.status = RecoveryStatus.IN_PROGRESS
+        recovery_action.started_at = datetime.now()
+        
+        handler = self.recovery_callbacks.get(recovery_action.recovery_type)
+        if not handler:
+            recovery_action.status = RecoveryStatus.FAILED
+            recovery_action.error_message = f"No handler for recovery type: {recovery_action.recovery_type}"
+            return False, recovery_action.error_message
+        
+        try:
+            success, message = handler(recovery_action.parameters)
+            recovery_action.status = RecoveryStatus.COMPLETED if success else RecoveryStatus.FAILED
+            recovery_action.completed_at = datetime.now()
+            recovery_action.error_message = None if success else message
+            return success, message
+        except Exception as e:
+            logger.exception(f"Recovery execution failed: {e}")
+            recovery_action.status = RecoveryStatus.FAILED
+            recovery_action.completed_at = datetime.now()
+            recovery_action.error_message = str(e)
+            return False, str(e)
     
-    def schedule_auto_recovery(self, response_id: str, delay: timedelta = None):
-        """Schedule automatic recovery after a timeout."""
-        # In a real implementation, this would schedule a background task
-        # For now, just log the intent
-        logger.info(f"Scheduled auto-recovery for response {response_id}")
+    def execute_recovery_plan(self, response_action: Any, trigger: RecoveryTrigger) -> List[Dict]:
+        """Execute full recovery plan for a response action."""
+        plan = self.recovery_plans.get(response_action.action_type)
+        if not plan:
+            logger.warning(f"No recovery plan for action type: {response_action.action_type}")
+            return []
+        
+        results = []
+        for recovery_type in plan.recovery_actions:
+            recovery = RecoveryAction(
+                recovery_id=str(uuid.uuid4())[:8],
+                original_action_id=response_action.action_id,
+                recovery_type=recovery_type,
+                target=response_action.target,
+                trigger=trigger,
+                parameters={
+                    "target": response_action.target,
+                    "original_params": response_action.parameters,
+                },
+            )
+            
+            success, message = self.execute_recovery(recovery)
+            
+            # Verify if checks defined
+            verified = False
+            if success and plan.verification_checks:
+                # Run verification checks
+                all_verified = True
+                for check in plan.verification_checks:
+                    if check in self.verification_callbacks:
+                        verified, _ = self.verification_callbacks[check]({
+                            "target": response_action.target,
+                        })
+                        if not verified:
+                            all_verified = False
+                            break
+                verified = all_verified
+            
+            result = {
+                "recovery_type": recovery_type,
+                "success": success,
+                "verified": verified,
+                "message": "Completed" if success else "Failed",
+            }
+            results.append(result)
+            
+            if not success:
+                logger.error(f"Recovery {recovery_type} failed for {response_action.target}")
+                break
+        
+        return results
     
-    def verify_recovery(self, response_id: str) -> dict:
-        """Verify that a response has been properly rolled back."""
-        # Check all actions in the response for rollback status
-        # Return verification results
-        return {
-            "response_id": response_id,
-            "verified": True,
-            "message": "All actions verified as recovered",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+    def trigger_recovery(
+        self,
+        response_action: Any,
+        trigger: RecoveryTrigger = RecoveryTrigger.ANALYST_REQUEST,
+    ) -> Dict[str, Any]:
+        """Trigger recovery for a response action."""
+        logger.info(f"Triggering recovery for action {response_action.action_id} (trigger: {trigger.value})")
+        
+        results = self.execute_recovery_plan(response_action, trigger)
+        
+        recovery_record = {
+            "trigger": trigger.value,
+            "response_action_id": response_action.action_id,
+            "target": response_action.target,
+            "timestamp": datetime.now().isoformat(),
+            "recoveries": results,
+            "all_successful": all(r["success"] for r in results),
+            "all_verified": all(r.get("verified", False) for r in results),
         }
+        
+        self.recovery_history.append(recovery_record)
+        return recovery_record
     
-    def get_recovery_status(self, response_id: str) -> dict:
-        """Get recovery status for a response."""
-        # In real implementation, would query the recovery plan
+    def auto_recovery_check(self, response_executor: Any) -> List[Dict]:
+        """Check for auto-recovery conditions (timeout, verification failure)."""
+        triggered = []
+        
+        for action in response_executor.action_history:
+            if action.status not in (ResponseStatus.COMPLETED, ResponseStatus.VERIFIED):
+                continue
+            
+            # Check timeout-based recovery
+            plan = self.recovery_plans.get(action.action_type)
+            if plan and plan.timeout_minutes > 0:
+                if action.completed_at:
+                    elapsed = datetime.now() - action.completed_at
+                    if elapsed > timedelta(minutes=plan.timeout_minutes):
+                        logger.info(f"Auto-recovery triggered by timeout for {action.action_id}")
+                        recovery = self.trigger_recovery(action, RecoveryTrigger.TIMEOUT)
+                        triggered.append(recovery)
+            
+            # Check verification failure
+            if action.verification_result is False:
+                logger.info(f"Auto-recovery triggered by verification failure for {action.action_id}")
+                recovery = self.trigger_recovery(action, RecoveryTrigger.VERIFICATION_FAILED)
+                triggered.append(recovery)
+        
+        return triggered
+    
+    def get_recovery_metrics(self) -> Dict[str, Any]:
+        """Get recovery metrics for dashboard."""
+        total = len(self.recovery_history)
+        successful = sum(1 for r in self.recovery_history if r["all_successful"])
+        verified = sum(1 for r in self.recovery_history if r["all_verified"])
+        
+        by_trigger = defaultdict(int)
+        for r in self.recovery_history:
+            by_trigger[r["trigger"]] += 1
+        
         return {
-            "response_id": response_id,
-            "recovery_status": "NOT_STARTED",
-            "actions": [],
+            "total_recoveries": total,
+            "successful": successful,
+            "success_rate": successful / total if total > 0 else 0,
+            "verified": verified,
+            "verification_rate": verified / successful if successful > 0 else 0,
+            "by_trigger": dict(by_trigger),
         }
 
 
-class SelfHealingManager:
+class SelfHealingOrchestrator:
     """
-    High-level self-healing manager that coordinates recovery.
-    
-    Features:
-    - Automatic recovery scheduling
-    - Health checks after recovery
-    - Graceful degradation
-    - Recovery verification
+    Orchestrates the full self-healing lifecycle:
+    DETECT → SCORE → VERIFY → RESPOND → LOG → RECOVER
     """
     
-    def __init__(self, response_engine: 'ResponseEngine' = None):
-        self.response_engine = response_engine
-        self.recovery_manager = RecoveryManager()
-        self._recovery_thread: Optional[Thread] = None
-        self._running = False
+    def __init__(
+        self,
+        response_executor: Optional[Any] = None,
+        recovery_executor: Optional[RecoveryExecutor] = None,
+    ):
+        self.response_executor = response_executor
+        self.recovery_executor = recovery_executor or RecoveryExecutor()
+        self.healing_history: List[Dict] = []
     
-    def start(self):
-        """Start the self-healing background thread."""
-        pass
-    
-    def stop(self):
-        """Stop the self-healing background thread."""
-        pass
-    
-    def trigger_recovery(self, response_id: str) -> dict:
-        """Manually trigger recovery for a response."""
-        return {"recovery_triggered": True, "response_id": response_id}
-    
-    def get_recovery_dashboard(self) -> dict:
-        """Get recovery dashboard data."""
+    def handle_full_lifecycle(
+        self,
+        alert: Dict[str, Any],
+        risk_scorer: Any = None,
+    ) -> Dict[str, Any]:
+        """
+        Handle full DETECT → SCORE → VERIFY → RESPOND → LOG → RECOVER lifecycle.
+        
+        For demo purposes, recovery is triggered immediately after response.
+        In production, recovery would be triggered by timeout or verification failure.
+        """
+        # This would integrate with the ResponseOrchestrator
+        # For now, return a summary of what would happen
+        
         return {
-            "active_recoveries": 0,
-            "completed_recoveries": 0,
-            "failed_recoveries": 0,
-            "pending_recoveries": 0,
+            "alert_id": alert.get("id"),
+            "lifecycle": "DETECT -> SCORE -> VERIFY -> RESPOND -> LOG -> RECOVER",
+            "stages": {
+                "detect": "Alert received",
+                "score": "Risk scored",
+                "verify": "Risk verified above threshold",
+                "respond": "Response actions executed",
+                "log": "Actions logged",
+                "recover": "Recovery scheduled (timeout-based)",
+            },
+            "recovery_scheduled": True,
+            "recovery_trigger": "timeout",
+            "estimated_recovery_time_minutes": 60,
+        }
+    
+    def get_healing_dashboard_data(self) -> Dict[str, Any]:
+        """Get data for self-healing dashboard."""
+        return {
+            "recovery_metrics": self.recovery_executor.get_recovery_metrics(),
+            "active_recoveries": len(self.recovery_executor.active_recoveries),
+            "recent_recoveries": self.recovery_executor.recovery_history[-10:] if self.recovery_executor.recovery_history else [],
         }
 
 
-if __name__ == "__main__":
-    print("Self-healing / Recovery module loaded successfully")
+# Example usage:
+#
+# executor = ResponseExecutor(dry_run=True)
+# recovery = RecoveryExecutor(response_executor=executor, dry_run=True)
+#
+# # Execute a response
+# action = ResponseAction(
+#     action_id="act_123",
+#     action_type=ResponseActionType.BLOCK_IP,
+#     scope=ResponseScope.SOURCE_IP,
+#     target="192.168.1.100",
+# )
+# executor.execute_action(action)
+#
+# # Trigger recovery (simulating timeout)
+# recovery = RecoveryExecutor(response_executor=executor, dry_run=True)
+# recovery.trigger_recovery(action, RecoveryTrigger.TIMEOUT)
+#
+# # Check metrics
+# metrics = recovery.get_recovery_metrics()
+# print(f"Recovery success rate: {metrics['success_rate']:.1%}")

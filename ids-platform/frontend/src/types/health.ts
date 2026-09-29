@@ -54,10 +54,4 @@ export interface SystemStats {
     memory_rss_bytes: number;
     threads: number;
   };
-  gpu: {
-    name: string;
-    utilization_percent: number;
-    memory_used_mb: number;
-    memory_total_mb: number;
-  } | null;
 }

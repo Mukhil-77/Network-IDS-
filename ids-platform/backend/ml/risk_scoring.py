@@ -1,27 +1,17 @@
 """
-Confidence + Risk Scoring System
+Risk scoring for IDS alerts.
 
-Implements a proper prediction confidence mechanism with separate:
-- MODEL CONFIDENCE: how confident the classifier is (0-100%)
-- RISK SCORE: security risk considering multiple factors (0-100)
+Combines calibrated model confidence, feature coverage, threat intelligence,
+severity, repetition, and asset context into a unified 0-100 risk score.
 
-Risk Score Factors:
-- Attack probability
-- Attack class severity
-- Traffic behavior
-- Frequency/repetition
-- Source IP reputation
-- Destination sensitivity
-- Historical events
-- Multiple alerts for same source
-- Behavior persistence over time
+Risk tiers:
+- 0-20:   LOW
+- 21-40:  GUARDED
+- 41-60:  MEDIUM
+- 61-80:  HIGH
+- 81-100: CRITICAL
 
-Risk Levels:
-0-20   LOW
-21-40  GUARDED
-41-60  MEDIUM
-61-80  HIGH
-81-100 CRITICAL
+Research contribution: Coverage-aware calibrated confidence -> risk score -> explainable alert prioritization.
 """
 
 from __future__ import annotations
@@ -29,479 +19,468 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 
-from backend.ml.unseen_detection import UnseenDetector
-from backend.ml.severity import get_severity, SeverityLevel
-from backend.threat_intelligence.reputation import reputation_registry, ThreatTag
+from backend.ml.calibration import ConfidenceCalibrator
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class RiskLevel(Enum):
+class RiskTier(Enum):
+    """Risk score tiers."""
     LOW = "LOW"
     GUARDED = "GUARDED"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
-
-
-@dataclass
-class RiskFactors:
-    """Individual risk factors contributing to the overall risk score."""
-    attack_probability: float = 0.0           # 0-1, model's predicted attack probability
-    attack_severity: float = 0.0              # 0-1, mapped from attack class severity
-    traffic_behavior_score: float = 0.0       # 0-1, anomalous traffic patterns
-    frequency_score: float = 0.0              # 0-1, repeated alerts from same source
-    source_reputation: float = 0.0            # 0-1, threat intelligence reputation
-    destination_sensitivity: float = 0.0      # 0-1, destination criticality
-    historical_events: float = 0.0            # 0-1, historical alerts for this source
-    persistence: float = 0.0                  # 0-1, behavior persistence over time
-    multiple_alerts: float = 0.0              # 0-1, multiple related alerts
     
-    def to_dict(self) -> dict:
-        return {
-            "attack_probability": self.attack_probability,
-            "attack_severity": self.attack_severity,
-            "traffic_behavior_score": self.traffic_behavior_score,
-            "frequency_score": self.frequency_score,
-            "source_reputation": self.source_reputation,
-            "destination_sensitivity": self.destination_sensitivity,
-            "historical_events": self.historical_events,
-            "persistence": self.persistence,
-            "multiple_alerts": self.multiple_alerts,
+    @classmethod
+    def from_score(cls, score: float) -> "RiskTier":
+        if score <= 20:
+            return cls.LOW
+        elif score <= 40:
+            return cls.GUARDED
+        elif score <= 60:
+            return cls.MEDIUM
+        elif score <= 80:
+            return cls.HIGH
+        else:
+            return cls.CRITICAL
+
+
+class SeverityLevel(Enum):
+    """Attack severity levels."""
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+    
+    @classmethod
+    def from_string(cls, s: str) -> "SeverityLevel":
+        s_upper = s.upper()
+        if s_upper in [e.value for e in cls]:
+            return cls(s_upper)
+        # Map legacy severity strings
+        mapping = {
+            "LOW": cls.LOW,
+            "MEDIUM": cls.MEDIUM,
+            "HIGH": cls.HIGH,
+            "CRITICAL": cls.CRITICAL,
+            "LOW_RISK": cls.LOW,
+            "GUARDED": cls.MEDIUM,
         }
+        return mapping.get(s_upper, cls.MEDIUM)
+    
+    def to_weight(self) -> float:
+        """Convert severity to risk weight (0-1)."""
+        weights = {
+            SeverityLevel.LOW: 0.2,
+            SeverityLevel.MEDIUM: 0.6,
+            SeverityLevel.HIGH: 0.8,
+            SeverityLevel.CRITICAL: 1.0,
+        }
+        return weights.get(self, 0.5)
 
 
 @dataclass
-class PredictionResult:
-    """Complete prediction result with confidence, risk, and explanation."""
+class ThreatIntelContext:
+    """Threat intelligence context for risk scoring."""
+    tag: str  # "Known Malicious", "Suspicious", "Unknown", "Trusted"
+    source: str
+    confidence: float  # 0-100
+    notes: str = ""
+    is_malicious: bool = False
+    is_trusted: bool = False
+    
+    def __post_init__(self):
+        self.is_malicious = self.tag in ("Known Malicious", "Suspicious")
+        self.is_trusted = self.tag == "Trusted"
+
+
+@dataclass
+class AssetContext:
+    """Asset/asset importance context."""
+    asset_id: str
+    asset_type: str  # "server", "workstation", "database", "network_device", etc.
+    importance: str  # "low", "medium", "high", "critical"
+    zone: str = "internal"  # "internal", "dmz", "external", "cloud"
+    
+    def to_weight(self) -> float:
+        weights = {
+            "low": 0.5,
+            "medium": 0.75,
+            "high": 1.0,
+            "critical": 1.25,
+        }
+        return weights.get(self.importance.lower(), 0.75)
+
+
+@dataclass
+class AlertContext:
+    """Full context for risk scoring an alert."""
+    # Model prediction
     predicted_class: str
-    model_confidence: float              # 0-100, model's own confidence
-    risk_score: int                      # 0-100, composite risk score
-    risk_level: RiskLevel                # LOW/GUARDED/MEDIUM/HIGH/CRITICAL
-    severity: str                        # LOW/MEDIUM/HIGH/CRITICAL
-    risk_factors: RiskFactors
-    is_unknown: bool                     # True if classified as unknown
-    explanation: str                     # Human-readable explanation
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    flow_id: Optional[str] = None
-    source_ip: Optional[str] = None
-    destination_ip: Optional[str] = None
-    source_port: Optional[int] = None
-    destination_port: Optional[int] = None
-    protocol: Optional[str] = None
+    raw_confidence: float  # 0-100, uncalibrated model probability
+    calibrated_confidence: Optional[float] = None  # 0-100, calibrated
     
-    def to_dict(self) -> dict:
-        return {
-            "predicted_class": self.predicted_class,
-            "model_confidence": self.model_confidence,
-            "risk_score": self.risk_score,
-            "risk_level": self.risk_level.value,
-            "severity": self.severity,
-            "risk_factors": self.risk_factors.to_dict(),
-            "is_unknown": self.is_unknown,
-            "explanation": self.explanation,
-            "timestamp": self.timestamp.isoformat(),
-            "flow_id": self.flow_id,
-            "source_ip": self.source_ip,
-            "destination_ip": self.destination_ip,
-            "source_port": self.source_port,
-            "destination_port": self.destination_port,
-            "protocol": self.protocol,
-        }
+    # Feature coverage
+    feature_coverage_ratio: float = 1.0  # 0-1, fraction of features available
+    missing_features: List[str] = field(default_factory=list)
+    
+    # Threat intelligence
+    threat_intel: Optional[ThreatIntelContext] = None
+    
+    # Asset context
+    source_asset: Optional[AssetContext] = None
+    target_asset: Optional[AssetContext] = None
+    
+    # Temporal context
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    event_count: int = 1
+    related_alerts: int = 0  # Number of related alerts in time window
+    
+    # Network context
+    source_ip: str = ""
+    dest_ip: str = ""
+    source_port: int = 0
+    dest_port: int = 0
+    protocol: str = ""
+    
+    # Model metadata
+    model_version: str = ""
+    processing_time_ms: float = 0.0
 
 
-# Risk scoring weights (sum to 1.0)
-RISK_WEIGHTS = {
-    "attack_probability": 0.25,
-    "attack_severity": 0.20,
-    "traffic_behavior_score": 0.10,
-    "frequency_score": 0.10,
-    "source_reputation": 0.10,
-    "destination_sensitivity": 0.10,
-    "historical_events": 0.05,
-    "persistence": 0.05,
-    "multiple_alerts": 0.05,
-}
-
-# Attack class to severity mapping (0-1)
-ATTACK_SEVERITY_MAP = {
-    "BENIGN": 0.0,
-    "BENIGN": 0.0,
-    "DoS": 0.7,
-    "DDoS": 0.9,
-    "Port Scan": 0.4,
-    "Port Scan": 0.4,
-    "Brute Force": 0.6,
-    "Web Attack - Brute Force": 0.7,
-    "XSS": 0.5,
-    "SQL Injection": 0.8,
-    "Infiltration": 0.9,
-    "Bot": 0.8,
-    "Heartbleed": 0.6,
-    "Exploit": 0.8,
-    "Fuzzer": 0.4,
-    "Reconnaissance": 0.3,
-    "Analysis": 0.4,
-    "Backdoor": 0.9,
-    "Shellcode": 0.9,
-    "Worms": 0.9,
-    "UNKNOWN": 0.8,
-    "Known Malicious": 0.9,
-    "Suspicious": 0.6,
-    "Trusted": 0.0,
-    "Legitimate": 0.1,
-}
-
-
-def get_attack_severity(attack_type: str) -> float:
-    """Get normalized severity score (0-1) for an attack type."""
-    return ATTACK_SEVERITY_MAP.get(attack_type, 0.5)
+@dataclass
+class RiskScoreResult:
+    """Result of risk scoring."""
+    risk_score: float  # 0-100
+    risk_tier: RiskTier
+    components: Dict[str, float]  # breakdown of score components
+    reasoning: List[str]  # human-readable explanations
+    confidence: float  # calibrated confidence 0-100
+    severity: SeverityLevel
+    recommended_action: str
+    requires_human_review: bool
 
 
 class RiskScorer:
     """
-    Computes risk scores from prediction results and contextual factors.
+    Computes unified risk score for IDS alerts.
     
-    The risk score is a weighted combination of multiple factors, normalized to 0-100.
+    Combines multiple signals into a single 0-100 risk score:
+    - Calibrated model confidence (30%)
+    - Feature coverage (10%)
+    - Attack severity (20%)
+    - Threat intelligence (15%)
+    - Repetition/persistence (15%)
+    - Asset importance (10%)
     """
     
-    def __init__(self, weights: dict[str, float] = None):
-        self.weights = weights or RISK_WEIGHTS
-        # Normalize weights to sum to 1
-        total = sum(self.weights.values())
-        self.weights = {k: v / sum(self.weights.values()) for k, v in self.weights.items()}
-    
-    def compute_risk_factors(
-        self,
-        attack_type: str,
-        model_confidence: float,
-        y_prob: np.ndarray = None,
-        source_ip: str = None,
-        destination_ip: str = None,
-        source_port: int = None,
-        destination_port: int = None,
-        protocol: str = None,
-        flow_features: dict = None,
-        alert_history: list = None,
-        db_session = None,
-    ) -> RiskFactors:
-        """
-        Compute all risk factors for a prediction.
-        """
-        factors = RiskFactors()
-        
-        # 1. Attack probability (from model confidence)
-        factors.attack_probability = min(1.0, max(0.0, 1.0 - (100 - 100) / 100))  # placeholder
-        
-        # Actually use model confidence
-        if hasattr(self, '_last_confidence'):
-            factors.attack_probability = self._last_confidence / 100.0
-        else:
-            factors.attack_probability = 0.5  # default
-        
-        # 2. Attack severity
-        factors.attack_severity = get_attack_severity(y_prob is not None and "UNKNOWN" or "UNKNOWN")
-        
-        # 3. Traffic behavior score (from flow features)
-        if flow_features:
-            factors.traffic_behavior_score = self._compute_traffic_behavior(flow_features)
-        
-        # 4. Frequency score (repeated alerts from same source)
-        if source_ip:
-            factors.frequency_score = self._compute_frequency_score(source_ip)
-        
-        # 5. Source reputation
-        if source_ip:
-            factors.source_reputation = self._get_source_reputation(source_ip)
-        
-        # 6. Destination sensitivity
-        if destination_ip:
-            factors.destination_sensitivity = self._get_destination_sensitivity(destination_ip)
-        
-        # 5. Historical events
-        if source_ip:
-            factors.historical_events = self._get_historical_events(source_ip)
-        
-        # 7. Persistence
-        if source_ip and alert_history:
-            factors.persistence = self._compute_persistence(alert_history)
-        
-        # 8. Multiple alerts
-        if source_ip and alert_history:
-            factors.multiple_alerts = self._compute_multiple_alerts(alert_history)
-        
-        return factors
-    
-    def _compute_traffic_behavior(self, flow_features: dict) -> float:
-        """Compute traffic behavior anomaly score from flow features."""
-        # Simple heuristic: check for unusual feature values
-        score = 0.0
-        # Example: very high packet rate, unusual packet sizes, etc.
-        # This would be customized based on domain knowledge
-        return min(1.0, score)
-    
-    def _compute_frequency_score(self, source_ip: str) -> float:
-        """Compute frequency score based on alert history for this source."""
-        # Would query database for recent alerts from this source
-        # Placeholder: returns 0.0
-        return 0.0
-    
-    def _get_source_reputation(self, source_ip: str) -> float:
-        """Get reputation score from threat intelligence."""
-        # Query threat intelligence
-        try:
-            # This would use the reputation_registry
-            # For now, return 0.0 (neutral)
-            return 0.0
-        except:
-            return 0.0
-    
-    def _get_destination_sensitivity(self, destination_ip: str) -> float:
-        """Get destination sensitivity score."""
-        # Check if destination is a critical asset
-        # Placeholder
-        return 0.0
-    
-    def _get_historical_events(self, source_ip: str) -> float:
-        """Get historical event count for source."""
-        return 0.0
-    
-    def _compute_persistence(self, alert_history: list) -> float:
-        """Compute behavior persistence score."""
-        return 0.0
-    
-    def _compute_multiple_alerts(self, alert_history: list) -> float:
-        """Compute multiple alerts score."""
-        return min(1.0, len(alert_history) / 10.0)
-
-
-class ConfidenceRiskScorer:
-    """
-    Main class for computing confidence, risk, and generating prediction results.
-    """
+    # Default weights (sum to 1.0)
+    DEFAULT_WEIGHTS = {
+        "confidence": 0.30,
+        "coverage": 0.10,
+        "severity": 0.20,
+        "threat_intel": 0.15,
+        "repetition": 0.15,
+        "asset_importance": 0.10,
+    }
     
     def __init__(
         self,
-        model: Any,
-        unseen_detector: UnseenDetector = None,
-        risk_scorer: RiskScorer = None,
-        severity_map: dict[str, str] = None,
+        weights: Optional[Dict[str, float]] = None,
+        confidence_thresholds: Optional[Dict[str, float]] = None,
     ):
-        self.model = model
-        self.unseen_detector = unseen_detector or UnseenDetector(model, [])
-        self.risk_scorer = risk_scorer or RiskScorer()
-        self.severity_map = severity_map or {}
+        self.weights = weights or self.DEFAULT_WEIGHTS.copy()
+        self.confidence_thresholds = confidence_thresholds or {
+            "low": 0.50,
+            "medium": 0.70,
+            "high": 0.85,
+            "critical": 0.95,
+        }
+        # Normalize weights
+        total = sum(self.weights.values())
+        self.weights = {k: v / total for k, v in self.weights.items()}
         
-        # Store last confidence for risk computation
-        self._last_confidence = 0.0
+        # Risk tier boundaries
+        self.tier_boundaries = {
+            RiskTier.CRITICAL: 80,
+            RiskTier.HIGH: 60,
+            RiskTier.MEDIUM: 40,
+            RiskTier.GUARDED: 20,
+            RiskTier.LOW: 0,
+        }
     
-    def predict(self, X: pd.DataFrame, flow_context: dict = None) -> list[PredictionResult]:
+    def compute_risk_score(self, context: AlertContext) -> RiskScoreResult:
         """
-        Make predictions with full confidence, risk scoring, and explanations.
+        Compute unified risk score for an alert.
         
         Args:
-            X: Feature matrix (PCA-transformed features)
-            flow_context: Optional dict with flow context (source_ip, destination_ip, etc.)
+            context: Full alert context
             
         Returns:
-            List of PredictionResult with full confidence, risk, and explanation.
+            RiskScoreResult with score, tier, components, and reasoning
         """
-        # Get model predictions
-        predictions = self.model.predict(X)
-        probabilities = self.model.predict_proba(X) if hasattr(self.model, "predict_proba") else None
+        components = {}
+        reasoning = []
         
-        results = []
-        for i, pred in enumerate(predictions):
-            # Get model confidence (max probability)
-            if probabilities is not None:
-                max_prob = probabilities[i].max()
-                confidence = float(max_prob * 100)
+        # 1. Calibrated confidence (30%)
+        confidence = context.calibrated_confidence if context.calibrated_confidence is not None \
+            else context.raw_confidence
+        confidence_norm = confidence / 100.0
+        components["confidence"] = confidence_norm * 100 * self.weights["confidence"]
+        reasoning.append(
+            f"Model confidence: {confidence:.1f}% "
+            f"({'calibrated' if context.calibrated_confidence else 'raw'})"
+        )
+        
+        # 2. Feature coverage (10%)
+        coverage = max(0.0, min(1.0, context.feature_coverage_ratio))
+        coverage_penalty = (1.0 - coverage) * 100 * self.weights["coverage"]
+        components["coverage"] = coverage * 100 * self.weights["coverage"]
+        if coverage < 1.0:
+            reasoning.append(
+                f"Feature coverage: {coverage:.1%} "
+                f"({len(context.missing_features)} features missing)"
+            )
+        
+        # 3. Severity (20%)
+        severity = SeverityLevel.from_string(context.predicted_class) \
+            if hasattr(context, 'severity') else SeverityLevel.MEDIUM
+        severity_weight = severity.to_weight()
+        components["severity"] = severity_weight * 100 * self.weights["severity"]
+        reasoning.append(f"Attack severity: {severity.value}")
+        
+        # 4. Threat intelligence (15%)
+        ti_score = 0.5  # neutral default
+        if context.threat_intel:
+            ti = context.threat_intel
+            if ti.is_malicious:
+                ti_score = 0.8 + (ti.confidence / 100) * 0.2  # 0.8-1.0
+                reasoning.append(f"Threat intel: {ti.tag} (confidence {ti.confidence:.0f}%)")
+            elif ti.is_trusted:
+                ti_score = 0.1  # trusted source reduces risk
+                reasoning.append(f"Trusted source: {ti.source}")
             else:
-                confidence = 50.0  # default if no probabilities
-            
-            # Store for risk scoring
-            self._last_confidence = confidence / 100.0
-            
-            # Get risk factors
-            flow_context = flow_context or {}
-            risk_factors = self._compute_risk_factors(
-                predicted_class=pred,
-                confidence=confidence,
-                flow_context=flow_context,
-            )
-            
-            # Compute risk score
-            risk_score = self._compute_risk_score(risk_factors)
-            risk_level = self._score_to_risk_level(risk_score)
-            
-            # Get severity
-            severity = self._get_severity(pred)
-            
-            # Check if unknown
-            is_unknown = self._is_unknown(pred, probabilities[i] if probabilities is not None else None)
-            
-            # Generate explanation
-            explanation = self._generate_explanation(pred, confidence, risk_factors)
-            
-            result = PredictionResult(
-                predicted_class=pred,
-                model_confidence=confidence,
-                risk_score=risk_score,
-                risk_level=risk_level,
-                severity=severity,
-                risk_factors=risk_factors,
-                is_unknown=is_unknown,
-                explanation=self._generate_explanation(pred, confidence, risk_factors),
-            )
-            
-            # Add flow context if provided
-            if flow_context:
-                result.flow_id = flow_context.get("flow_id")
-                result.source_ip = flow_context.get("source_ip")
-                result.destination_ip = flow_context.get("destination_ip")
-                result.source_port = flow_context.get("source_port")
-                result.destination_port = flow_context.get("destination_port")
-                result.protocol = flow_context.get("protocol")
-            
-            results.append(result)
-        
-        return results
-    
-    def _compute_risk_factors(self, predicted_class: str, confidence: float, flow_context: dict) -> RiskFactors:
-        """Compute all risk factors."""
-        factors = RiskFactors()
-        
-        # 1. Attack probability (1 - normalized confidence for attacks, 1 - confidence for benign)
-        if predicted_class == "BENIGN" or predicted_class == "UNKNOWN":
-            factors.attack_probability = 1.0 - (confidence / 100.0)
+                ti_score = 0.5
+                reasoning.append(f"Threat intel: {ti.tag} (unknown)")
         else:
-            factors.attack_probability = confidence / 100.0
+            reasoning.append("No threat intelligence available")
+        components["threat_intel"] = ti_score * 100 * self.weights["threat_intel"]
         
-        # 2. Attack severity
-        factors.attack_severity = get_attack_severity(predicted_class)
+        # 5. Repetition/persistence (15%)
+        rep_score = self._compute_repetition_score(context)
+        components["repetition"] = rep_score * 100 * self.weights["repetition"]
+        if context.event_count > 1:
+            reasoning.append(
+                f"Repeated activity: {context.event_count} events, "
+                f"{context.related_alerts} related alerts"
+            )
         
-        # 3. Traffic behavior (placeholder - would use flow features)
-        factors.traffic_behavior_score = 0.3  # default
+        # 6. Asset importance (10%)
+        asset_score = self._compute_asset_score(context)
+        components["asset_importance"] = asset_score * 100 * self.weights["asset_importance"]
+        if context.source_asset or context.target_asset:
+            assets = []
+            if context.source_asset:
+                assets.append(f"src:{context.source_asset.importance}")
+            if context.target_asset:
+                assets.append(f"dst:{context.target_asset.importance}")
+            reasoning.append(f"Asset importance: {', '.join(assets)}")
         
-        # 4. Frequency score (placeholder)
-        factors.frequency_score = 0.2
+        # Compute total score
+        total_score = sum(components.values())
+        risk_score = max(0.0, min(100.0, total_score))
+        risk_tier = RiskTier.from_score(risk_score)
         
-        # 5. Source reputation
-        factors.source_reputation = 0.0
+        # Determine recommended action based on tier
+        recommended_action = self._get_recommended_action(risk_tier, context)
         
-        # 6. Destination sensitivity
-        factors.destination_sensitivity = 0.0
+        # Determine if human review required
+        requires_review = risk_tier in (RiskTier.HIGH, RiskTier.CRITICAL) \
+            or context.calibrated_confidence is not None and context.calibrated_confidence < 70
         
-        # 7. Historical events
-        factors.historical_events = 0.0
+        # Determine severity
+        severity = SeverityLevel.from_string(
+            getattr(context, 'severity', context.predicted_class)
+        )
         
-        # 8. Persistence
-        factors.persistence = 0.0
-        
-        # 9. Multiple alerts
-        factors.multiple_alerts = 0.0
-        
-        return factors
+        return RiskScoreResult(
+            risk_score=risk_score,
+            risk_tier=risk_tier,
+            components={k: round(v, 2) for k, v in components.items()},
+            reasoning=reasoning,
+            confidence=confidence,
+            severity=severity,
+            recommended_action=recommended_action,
+            requires_human_review=requires_review,
+        )
     
-    def _compute_risk_score(self, factors: RiskFactors) -> int:
-        """Compute composite risk score (0-100) from weighted factors."""
-        score = 0.0
-        for factor_name, weight in RISK_WEIGHTS.items():
-            factor_value = getattr(factors, factor_name, 0.0)
-            score += weight * factor_value
-        return int(min(100, max(0, score * 100)))
+    def _compute_repetition_score(self, context: AlertContext) -> float:
+        """Compute repetition/persistence score (0-1)."""
+        # Base score from event count (logarithmic)
+        event_score = min(1.0, np.log1p(context.event_count) / np.log(101))
+        
+        # Related alerts bonus
+        related_score = min(1.0, context.related_alerts / 10.0)
+        
+        # Time persistence bonus
+        persistence_score = 0.0
+        if context.first_seen and context.last_seen:
+            duration = (context.last_seen - context.first_seen).total_seconds()
+            # Full score after 1 hour of persistent activity
+            persistence_score = min(1.0, duration / 3600)
+        
+        # Weighted combination
+        return 0.5 * event_score + 0.3 * related_score + 0.2 * persistence_score
     
-    def _score_to_risk_level(self, score: int) -> RiskLevel:
-        """Convert risk score to risk level."""
-        if score <= 20:
-            return RiskLevel.LOW
-        elif score <= 40:
-            return RiskLevel.GUARDED
-        elif score <= 60:
-            return RiskLevel.MEDIUM
-        elif score <= 80:
-            return RiskLevel.HIGH
-        else:
-            return RiskLevel.CRITICAL
+    def _compute_asset_score(self, context: AlertContext) -> float:
+        """Compute asset importance score (0-1)."""
+        scores = []
+        
+        if context.source_asset:
+            scores.append(context.source_asset.to_weight())
+        if context.target_asset:
+            # Target asset is more important for risk
+            scores.append(context.target_asset.to_weight() * 1.2)
+        
+        if not scores:
+            return 0.5  # neutral
+        
+        # Use max (most important asset drives risk)
+        return min(1.0, max(scores) / 1.25)
     
-    def _get_severity(self, attack_type: str) -> str:
-        """Get severity level for attack type."""
-        severity_map = {
-            "BENIGN": "LOW",
-            "UNKNOWN": "HIGH",
-            "DoS": "HIGH",
-            "DDoS": "CRITICAL",
-            "Port Scan": "MEDIUM",
-            "Brute Force": "HIGH",
-            "Web Attack - Brute Force": "HIGH",
-            "XSS": "MEDIUM",
-            "SQL Injection": "CRITICAL",
-            "Infiltration": "CRITICAL",
-            "Bot": "HIGH",
-            "Heartbleed": "HIGH",
-            "Exploit": "CRITICAL",
-            "Fuzzer": "MEDIUM",
-            "Reconnaissance": "LOW",
-            "Analysis": "LOW",
-            "Backdoor": "CRITICAL",
-            "Shellcode": "CRITICAL",
-            "Worms": "CRITICAL",
-            "UNKNOWN": "HIGH",
-            "Known Malicious": "CRITICAL",
-            "Suspicious": "HIGH",
-            "Trusted": "LOW",
-            "Legitimate": "LOW",
+    def _get_recommended_action(self, tier: RiskTier, context: AlertContext) -> str:
+        """Get recommended action based on risk tier."""
+        actions = {
+            RiskTier.CRITICAL: "Immediate containment: isolate source, block IP, escalate to IR team",
+            RiskTier.HIGH: "Automated containment: block IP, rate limit, notify SOC analyst",
+            RiskTier.MEDIUM: "Enhanced monitoring: increase logging, alert analyst, rate limit",
+            RiskTier.GUARDED: "Log and monitor: increase logging, add to watchlist",
+            RiskTier.LOW: "Log only: record for trend analysis",
         }
-        return severity_map.get(predicted_class, "MEDIUM")
+        base = actions.get(tier, "Log and monitor")
+        
+        # Add context-specific recommendations
+        if context.threat_intel and context.threat_intel.is_trusted:
+            base += " (Trusted source - verify before action)"
+        
+        return base
+
+
+# Severity mapping for common attack types
+ATTACK_SEVERITY_MAP = {
+    "BENIGN": SeverityLevel.LOW,
+    "DoS": SeverityLevel.HIGH,
+    "DDoS": SeverityLevel.CRITICAL,
+    "Port Scan": SeverityLevel.MEDIUM,
+    "Bot": SeverityLevel.HIGH,
+    "Brute Force": SeverityLevel.HIGH,
+    "Web Attack - Brute Force": SeverityLevel.HIGH,
+    "XSS": SeverityLevel.MEDIUM,
+    "SQL Injection": SeverityLevel.HIGH,
+    "Infiltration": SeverityLevel.CRITICAL,
+    "Heartbleed": SeverityLevel.HIGH,
+    "UNKNOWN": SeverityLevel.MEDIUM,
+}
+
+
+def get_attack_severity(attack_type: str) -> SeverityLevel:
+    """Get severity level for an attack type."""
+    return ATTACK_SEVERITY_MAP.get(attack_type, SeverityLevel.MEDIUM)
+
+
+def compute_risk_score_for_alert(
+    alert: Dict[str, Any],
+    calibrator: Optional[ConfidenceCalibrator] = None,
+    threat_intel: Optional[ThreatIntelContext] = None,
+    asset_db: Optional[Dict[str, AssetContext]] = None,
+    recent_alerts: Optional[List[Dict]] = None,
+) -> RiskScoreResult:
+    """
+    High-level function to compute risk score for an alert from the SOC pipeline.
     
-    def _is_unknown(self, predicted_class: str, probabilities: np.ndarray = None) -> bool:
-        """Determine if prediction should be classified as unknown."""
-        # Use unseen detector if available
-        if self.unseen_detector:
-            pred = self.unseen_detector.predict(pd.DataFrame([{}])[0])  # placeholder
-            return pred.is_unknown
-        return False
+    Args:
+        alert: Alert dict from detection pipeline
+        calibrator: Optional confidence calibrator
+        threat_intel: Threat intelligence for source/dest IPs
+        asset_db: Asset database for IP -> asset mapping
+        recent_alerts: Recent alerts for repetition detection
+        
+    Returns:
+        RiskScoreResult with score and reasoning
+    """
+    scorer = RiskScorer()
     
-    def _generate_explanation(self, predicted_class: str, confidence: float, risk_factors: RiskFactors) -> str:
-        """Generate human-readable explanation for the prediction."""
-        parts = []
-        
-        parts.append(f"Classified as {predicted_class} with {confidence:.1f}% confidence.")
-        
-        if risk_factors.attack_severity > 0.7:
-            parts.append(f"High severity attack type ({predicted_class}).")
-        elif risk_factors.attack_severity > 0.4:
-            parts.append(f"Moderate severity attack type ({predicted_class}).")
-        
-        if risk_factors.source_reputation > 0.5:
-            parts.append("Source IP has poor reputation.")
-        
-        if risk_factors.frequency_score > 0.5:
-            parts.append("Repeated alerts from this source.")
-        
-        if risk_factors.multiple_alerts > 0.5:
-            parts.append("Multiple related alerts detected.")
-        
-        if risk_factors.persistence > 0.5:
-            parts.append("Persistent suspicious behavior over time.")
-        
-        if risk_factors.attack_probability > 0.8:
-            parts.append("High attack probability.")
-        
-        return " ".join(parts)
+    # Get calibrated confidence if calibrator available
+    raw_confidence = alert.get("confidence", 0.0)
+    calibrated_confidence = None
+    if calibrator and "features" in alert:
+        # Would need to extract features and run calibrator
+        pass
+    
+    # Build context
+    context = AlertContext(
+        predicted_class=alert.get("attack_type", "UNKNOWN"),
+        raw_confidence=raw_confidence,
+        calibrated_confidence=calibrated_confidence,
+        feature_coverage_ratio=alert.get("feature_coverage", 1.0),
+        missing_features=alert.get("missing_features", []),
+        threat_intel=threat_intel,
+        source_ip=alert.get("source_ip", ""),
+        dest_ip=alert.get("destination_ip", ""),
+        source_port=alert.get("source_port", 0),
+        dest_port=alert.get("destination_port", 0),
+        protocol=alert.get("protocol", ""),
+        model_version=alert.get("model_version", ""),
+        processing_time_ms=alert.get("processing_time_ms", 0.0),
+    )
+    
+    # Add severity from attack type
+    context.predicted_class = alert.get("attack_type", "UNKNOWN")
+    
+    # Add threat intel if provided
+    if threat_intel:
+        context.threat_intel = threat_intel
+    
+    # Add asset context from database
+    if asset_db:
+        context.source_asset = asset_db.get(context.source_ip)
+        context.target_asset = asset_db.get(context.dest_ip)
+    
+    # Compute repetition from recent alerts
+    if recent_alerts:
+        src_ip = context.source_ip
+        same_src = [a for a in recent_alerts if a.get("source_ip") == src_ip]
+        context.event_count = len(same_src) + 1
+        context.related_alerts = len(same_src)
+        if same_src:
+            timestamps = [a.get("timestamp") for a in same_src if a.get("timestamp")]
+            if timestamps:
+                context.first_seen = min(timestamps)
+                context.last_seen = max(timestamps)
+    
+    return scorer.compute_risk_score(context)
 
 
-# Global instance getter
-def create_confidence_risk_scorer(model: Any, unseen_detector: Any = None) -> ConfidenceRiskScorer:
-    """Factory function to create a ConfidenceRiskScorer with default settings."""
-    return ConfidenceRiskScorer(model=model, unseen_detector=None)
-
-
-if __name__ == "__main__":
-    print("Risk scoring module loaded successfully")
+# Example usage:
+#
+# scorer = RiskScorer()
+# context = AlertContext(
+#     predicted_class="DoS",
+#     raw_confidence=95.0,
+#     calibrated_confidence=92.0,
+#     feature_coverage_ratio=0.95,
+#     threat_intel=ThreatIntelContext(tag="Known Malicious", source="internal", confidence=95),
+#     target_asset=AssetContext("server1", "database", "critical"),
+#     event_count=5,
+#     related_alerts=3,
+# )
+# result = scorer.compute_risk_score(context)
+# print(f"Risk: {result.risk_score:.1f} ({result.risk_tier.value})")
+# print(f"Action: {result.recommended_action}")

@@ -15,7 +15,6 @@ const MEMORY_COLOR = "#a78bfa";
 const DISK_COLOR = "#34d399";
 const NETWORK_COLOR = "#f472b6";
 const PROCESS_COLOR = "#fbbf24";
-const GPU_COLOR = "#60a5fa";
 
 export default function SystemHealth() {
   const apiHealthQuery = useApiHealth();
@@ -29,7 +28,6 @@ export default function SystemHealth() {
   const diskSeries = useTelemetrySeries(statsQuery.data?.disk.percent);
   const netRecvSeries = useTelemetrySeries(statsQuery.data?.network.bytes_recv_per_sec);
   const processSeries = useTelemetrySeries(statsQuery.data?.process.cpu_percent);
-  const gpuSeries = useTelemetrySeries(statsQuery.data?.gpu?.utilization_percent);
 
   const backendUp = apiHealthQuery.isSuccess;
   const dbUp = systemHealthQuery.isSuccess; // /system/health only succeeds if the DB query it runs succeeds
@@ -124,17 +122,6 @@ export default function SystemHealth() {
               footer={`RSS ${formatBytes(stats.process.memory_rss_bytes)}`}
               series={processSeries}
             />
-
-            {stats.gpu && (
-              <TelemetryCard
-                title="GPU"
-                percent={stats.gpu.utilization_percent}
-                color={GPU_COLOR}
-                detail={stats.gpu.name}
-                footer={`VRAM ${formatBytes(stats.gpu.memory_used_mb * 1024 * 1024)} / ${formatBytes(stats.gpu.memory_total_mb * 1024 * 1024)}`}
-                series={gpuSeries}
-              />
-            )}
           </div>
         )}
       </div>

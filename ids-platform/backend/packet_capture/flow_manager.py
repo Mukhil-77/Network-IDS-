@@ -85,6 +85,25 @@ class Flow:
     fwd_urg: int = 0
     bwd_urg: int = 0
 
+    # Computable missing features (Phase 2)
+    init_win_bytes_forward: int = 0
+    init_win_bytes_backward: int = 0
+    act_data_pkt_fwd: int = 0
+    min_seg_size_forward: int = 0
+    
+    # Subflow tracking (5-second activity timeout)
+    subflow_fwd_packets: int = 0
+    subflow_fwd_bytes: int = 0
+    subflow_bwd_packets: int = 0
+    subflow_bwd_bytes: int = 0
+    last_subflow_time: float = 0.0
+    fwd_subflow_start_time: float = 0.0
+    bwd_subflow_start_time: float = 0.0
+    fwd_subflow_bytes: int = 0
+    fwd_subflow_packets: int = 0
+    bwd_subflow_bytes: int = 0
+    bwd_subflow_packets: int = 0
+
     @property
     def packet_count(self) -> int:
         return len(self.fwd_lengths) + len(self.bwd_lengths)
@@ -104,6 +123,19 @@ class Flow:
                 self.fwd_psh += 1
             if "URG" in pkt.tcp_flags:
                 self.fwd_urg += 1
+            
+            # Track initial window size from first SYN packet
+            if "SYN" in pkt.tcp_flags and "ACK" not in pkt.tcp_flags:
+                if self.init_win_bytes_forward == 0:
+                    self.init_win_bytes_forward = pkt.tcp_window
+            
+            # Track forward payload packets
+            if pkt.payload_length > 0:
+                self.act_data_pkt_fwd += 1
+                self.min_seg_size_forward = min(self.min_seg_size_forward, pkt.length) if self.min_seg_size_forward > 0 else pkt.length
+            
+            # Subflow tracking (5-second activity timeout)
+            self._update_subflow(pkt.timestamp, True, pkt.length)
         else:
             self.bwd_lengths.append(pkt.length)
             self.bwd_timestamps.append(pkt.timestamp)
@@ -112,11 +144,57 @@ class Flow:
                 self.bwd_psh += 1
             if "URG" in pkt.tcp_flags:
                 self.bwd_urg += 1
+            
+            # Track initial window size from first backward SYN packet
+            if "SYN" in pkt.tcp_flags and "ACK" not in pkt.tcp_flags:
+                if self.init_win_bytes_backward == 0:
+                    self.init_win_bytes_backward = pkt.tcp_window
+            
+            # Subflow tracking for backward direction
+            self._update_subflow(pkt.timestamp, False, pkt.length)
 
         for flag in pkt.tcp_flags:
             self.flag_counts[flag] = self.flag_counts.get(flag, 0) + 1
 
         self.last_seen = max(self.last_seen, pkt.timestamp)
+
+    def _update_subflow(self, timestamp: float, is_forward: bool, length: int) -> None:
+        """Update subflow tracking with 5-second activity timeout.
+        
+        CICFlowMeter defines subflows as bursts of activity separated by
+        idle periods >= 5 seconds. We track subflow packets/bytes separately
+        for forward and backward directions.
+        """
+        if is_forward:
+            if self.fwd_subflow_start_time == 0.0:
+                self.fwd_subflow_start_time = timestamp
+                self.fwd_subflow_packets = 1
+                self.fwd_subflow_bytes = length
+            elif timestamp - self.fwd_subflow_start_time > 5.0:
+                # New subflow (idle > 5 seconds)
+                self.fwd_subflow_start_time = timestamp
+                self.fwd_subflow_packets = 1
+                self.fwd_subflow_bytes = length
+            else:
+                self.fwd_subflow_packets += 1
+                self.fwd_subflow_bytes += length
+            self.fwd_subflow_packets = self.fwd_subflow_packets  # ensure attribute exists
+            self.fwd_subflow_bytes = self.fwd_subflow_bytes
+        else:
+            if self.bwd_subflow_start_time == 0.0:
+                self.bwd_subflow_start_time = timestamp
+                self.bwd_subflow_packets = 1
+                self.bwd_subflow_bytes = length
+            elif timestamp - self.bwd_subflow_start_time > 5.0:
+                # New subflow (idle > 5 seconds)
+                self.bwd_subflow_start_time = timestamp
+                self.bwd_subflow_packets = 1
+                self.bwd_subflow_bytes = length
+            else:
+                self.bwd_subflow_packets += 1
+                self.bwd_subflow_bytes += length
+            self.bwd_subflow_packets = self.bwd_subflow_packets  # ensure attribute exists
+            self.bwd_subflow_bytes = self.bwd_subflow_bytes
 
     def saw_terminal_flag(self) -> bool:
         """True once a FIN or RST has been observed - such a flow should close promptly rather than wait out the idle timeout."""

@@ -53,6 +53,7 @@ def load_and_merge_dataset(
 
     Returns:
         A single concatenated DataFrame with a fresh RangeIndex.
+        Includes a 'day' column indicating the day of the week (Mon, Tue, etc.)
 
     Raises:
         DataLoadError: If `data_dir` doesn't exist, a file is missing, or a
@@ -75,6 +76,10 @@ def load_and_merge_dataset(
         except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError) as exc:
             raise DataLoadError(f"Failed to parse '{file_path}': {exc}") from exc
 
+        # Add day column based on filename for temporal splitting
+        day = _extract_day_from_filename(filename)
+        df['day'] = day
+
         logger.info("Loaded '%s' -> %d rows, %d columns", filename, *df.shape)
         frames.append(df)
 
@@ -90,6 +95,24 @@ def load_and_merge_dataset(
         merged.memory_usage(deep=True).sum() / (1024 ** 2),
     )
     return merged
+
+
+def _extract_day_from_filename(filename: str) -> str:
+    """Extract day of week from CIC-IDS2017 filename."""
+    filename_lower = filename.lower()
+    if filename_lower.startswith('monday'):
+        return 'Mon'
+    elif filename_lower.startswith('tuesday'):
+        return 'Tue'
+    elif filename_lower.startswith('wednesday'):
+        return 'Wed'
+    elif filename_lower.startswith('thursday'):
+        return 'Thu'
+    elif filename_lower.startswith('friday'):
+        return 'Fri'
+    else:
+        # Default fallback
+        return 'Unknown'
 
 
 def clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
@@ -278,8 +301,9 @@ def preprocess_dataset(
         3. Remove duplicate rows
         4. Handle missing/infinite values
         5. Map raw labels to grouped attack types
-        6. Drop invariant columns
-        7. Optimize memory usage
+        4. Drop invariant columns
+        5. Optimize memory usage
+        6. Add synthetic timestamp column (based on row order within each day)
 
     This is the single entry point scripts/train_pipeline.py (Milestone 1's
     successor) will call - individual steps remain independently usable and
@@ -291,7 +315,7 @@ def preprocess_dataset(
 
     Returns:
         A cleaned DataFrame with a grouped `Attack Type` column, ready for
-        feature engineering (scaling + PCA).
+        feature engineering (scaling + PCA). Includes 'day' and 'timestamp' columns.
     """
     logger.info("Starting preprocessing pipeline (data_dir=%s)", data_dir)
 
@@ -300,8 +324,28 @@ def preprocess_dataset(
     df = remove_duplicate_rows(df)
     df = handle_missing_and_infinite_values(df)
     df = map_attack_labels(df)
+    
+    # Preserve 'day' column before dropping invariant columns
+    day_col = None
+    if 'day' in df.columns:
+        day_col = df['day'].copy()
+    
     df, _dropped_cols = drop_invariant_columns(df)
     df = optimize_memory_usage(df)
+    
+    # Restore 'day' column if it was dropped as invariant
+    if 'day' not in df.columns and 'day_col' in locals() and day_col is not None:
+        df['day'] = day_col
+        logger.info("Restored 'day' column after invariant column removal")
+    
+    # Add synthetic timestamp column based on row order within each day
+    # The CSV files are already in chronological order (as extracted by CICFlowMeter)
+    # So we can use row order within each day as a proxy for timestamp
+    if 'day' in df.columns:
+        df['timestamp'] = df.groupby('day').cumcount().astype(float)
+        logger.info("Added synthetic timestamp column based on row order within each day")
+    else:
+        logger.warning("No 'day' column found, cannot add synthetic timestamp")
 
     logger.info("Preprocessing complete -> final shape %d rows, %d columns", *df.shape)
     return df
