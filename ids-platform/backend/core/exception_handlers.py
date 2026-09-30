@@ -42,11 +42,22 @@ def _error_body(error: str, detail) -> dict:
     return {"error": error, "detail": detail}
 
 
+def _cors_headers() -> dict:
+    """Standard CORS headers for error responses."""
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+
 async def handle_request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     logger.warning("Malformed request body on %s: %s", request.url.path, exc.errors())
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content=_error_body("validation_error", exc.errors()),
+        headers=_cors_headers(),
     )
 
 
@@ -55,6 +66,7 @@ async def handle_feature_validation_failed(request: Request, exc: FeatureValidat
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=_error_body("invalid_input", [e.model_dump() for e in exc.errors]),
+        headers=_cors_headers(),
     )
 
 
@@ -63,6 +75,7 @@ async def handle_model_missing(request: Request, exc: Exception) -> JSONResponse
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content=_error_body("model_missing", str(exc)),
+        headers=_cors_headers(),
     )
 
 
@@ -71,6 +84,7 @@ async def handle_inference_pipeline_error(request: Request, exc: InferencePipeli
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=_error_body("internal_error", "Prediction failed due to an internal error."),
+        headers=_cors_headers(),
     )
 
 
@@ -79,6 +93,7 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=_error_body("internal_error", "An unexpected error occurred."),
+        headers=_cors_headers(),
     )
 
 

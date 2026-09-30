@@ -99,12 +99,12 @@ class PredictionService:
     def get_expected_features(self) -> list[str]:
         """
         The trained model's exact required raw input feature names/order
-        (Predictor.expected_features). Added for Milestone 5:
+        (Predictor.raw_feature_names). Added for Milestone 5:
         backend.packet_capture.feature_mapper reindexes live-computed flow
         features against this list. Raises ArtifactNotFoundError if no
         model is available.
         """
-        return self._active_predictor().expected_features
+        return self._active_predictor().raw_feature_names
 
     def list_model_versions(self) -> list[dict]:
         """

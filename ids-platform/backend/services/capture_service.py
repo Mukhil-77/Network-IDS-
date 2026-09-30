@@ -107,6 +107,12 @@ class CaptureService:
             return
         try:
             self.capture.stop()
+        except Exception as exc:
+            # Scapy can raise "Unsupported (offline or unsupported socket)" when
+            # the sniffer was already stopped or the socket is in an unexpected
+            # state. Treat this as a successful stop since the capture is
+            # effectively no longer running.
+            logger.warning("Capture stop raised exception (treating as stopped): %s", exc)
         finally:
             # Detach the capture no matter what so the service's status always
             # reports "not running" once stop is requested - a backend hiccup

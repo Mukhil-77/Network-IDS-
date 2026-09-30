@@ -35,10 +35,15 @@ export interface AlertRow {
   group_size?: number;
   first_seen?: string;
   last_seen?: string;
-  // Explainability
-  shap_explanation?: SHAPExplanation;
+  // Explainability (SHAP) - NOT currently provided by backend API.
+  // Backend ML has explainability.py but it's not exposed through /alerts endpoints.
+  // shap_explanation?: SHAPExplanation;  // Future: uncomment when backend exposes it
 }
 
+// SHAP/Explainability types - NOT currently provided by backend API.
+// Backend ML has explainability.py and shap_explainer.py but these are not
+// exposed through the prediction or alerts API endpoints. Kept for future use.
+/*
 export interface SHAPExplanation {
   predicted_class: string;
   confidence: number;
@@ -53,6 +58,7 @@ export interface SHAPFeature {
   impact: "positive" | "negative" | "unknown";
   magnitude: number;
 }
+*/
 
 export interface PaginatedAlerts {
   items: AlertRow[];

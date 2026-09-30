@@ -1,4 +1,23 @@
-import { SHAPExplanation, SHAPFeature } from "../../types/alert";
+// SHAP/Explainability component - NOT currently connected to backend API.
+// Backend ML has explainability.py and shap_explainer.py but these are not
+// exposed through the prediction or alerts API endpoints.
+// This component is kept for future use when backend exposes SHAP data.
+
+// Local type definitions (mirror backend ML explainability.py output)
+interface SHAPFeature {
+  feature: string;
+  shap_value: number;
+  impact: "positive" | "negative" | "unknown";
+  magnitude: number;
+}
+
+interface SHAPExplanation {
+  predicted_class: string;
+  confidence: number;
+  top_features: SHAPFeature[];
+  base_value: number;
+  prediction_value: number;
+}
 
 interface SHAPExplanationCardProps {
   explanation: SHAPExplanation | null;
@@ -16,8 +35,8 @@ export function SHAPExplanationCard({ explanation, className = "" }: SHAPExplana
     );
   }
 
-  const positiveFeatures = explanation.top_features.filter(f => f.impact === "positive");
-  const negativeFeatures = explanation.top_features.filter(f => f.impact === "negative");
+  const positiveFeatures = explanation.top_features.filter((f: SHAPFeature) => f.impact === "positive");
+  const negativeFeatures = explanation.top_features.filter((f: SHAPFeature) => f.impact === "negative");
 
   return (
     <div className={`bg-surface-raised rounded-xl p-4 ${className}`}>
@@ -38,7 +57,7 @@ export function SHAPExplanationCard({ explanation, className = "" }: SHAPExplana
               Factors increasing likelihood
             </h4>
             <div className="space-y-2">
-              {positiveFeatures.slice(0, 5).map((feat, idx) => (
+              {positiveFeatures.slice(0, 5).map((feat: SHAPFeature, idx: number) => (
                 <SHAPFeatureBar key={idx} feature={feat} color="emerald" />
               ))}
             </div>
@@ -52,7 +71,7 @@ export function SHAPExplanationCard({ explanation, className = "" }: SHAPExplana
               Factors decreasing likelihood
             </h4>
             <div className="space-y-2">
-              {negativeFeatures.slice(0, 5).map((feat, idx) => (
+              {negativeFeatures.slice(0, 5).map((feat: SHAPFeature, idx: number) => (
                 <SHAPFeatureBar key={idx} feature={feat} color="red" />
               ))}
             </div>
@@ -64,7 +83,7 @@ export function SHAPExplanationCard({ explanation, className = "" }: SHAPExplana
 }
 
 interface SHAPFeatureBarProps {
-  feature: { feature: string; shap_value: number; magnitude: number; impact: string };
+  feature: SHAPFeature;
   color: "emerald" | "red";
 }
 

@@ -1,7 +1,6 @@
 import type { AlertRow, AlertFilters } from "../../types/alert";
 import { SeverityBadge, StatusBadge } from "../common/Badge";
 import { formatTimestamp } from "../../utils/formatters";
-import { SHAPExplanationCard } from "./SHAPExplanationCard";
 
 function threatTagBg(tag: string) {
   switch (tag) {

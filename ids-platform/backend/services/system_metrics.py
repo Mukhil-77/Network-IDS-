@@ -120,8 +120,11 @@ def collect_system_stats() -> dict:
 
     try:
         proc = psutil.Process()
+        # Use a small interval to get immediate CPU reading instead of
+        # interval=None which only returns delta since last call (0 on first call)
+        proc_cpu = proc.cpu_percent(interval=0.1)
         snapshot["process"] = {
-            "cpu_percent": proc.cpu_percent(interval=None),
+            "cpu_percent": proc_cpu,
             "memory_rss_bytes": proc.memory_info().rss,
             "threads": proc.num_threads(),
         }

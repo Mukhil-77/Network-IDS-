@@ -42,7 +42,7 @@ def map_to_model_features(
 ) -> tuple[dict[str, float], FeatureMappingReport]:
     """
     Reindex `live_features` to exactly the canonical feature set, in order,
-    raising an error for any feature the live pipeline cannot reconstruct.
+    filling missing features with 0.0 (as documented in flow_features.py).
 
     Args:
         live_features: Output of flow_features.extract_flow_features().
@@ -54,9 +54,6 @@ def map_to_model_features(
         backend.ml.validator / inference.predict() as-is; `report` records
         what was matched vs. missing, for logging and (later) surfacing
         confidence caveats to the UI.
-
-    Raises:
-        ValueError: If any expected feature is missing from live_features.
     """
     if expected_features is None:
         expected_features = CANONICAL_FEATURE_NAMES
@@ -69,22 +66,22 @@ def map_to_model_features(
             mapped[name] = live_features[name]
             report.matched.append(name)
         else:
+            # Per flow_features.py docstring: features the live pipeline cannot
+            # reconstruct are filled with 0.0 rather than silently dropped.
+            # This allows the model to run (though accuracy may be reduced
+            # for features it actually relied on).
+            mapped[name] = 0.0
             report.missing.append(name)
 
     report.dropped_unused = sorted(set(live_features) - set(expected_features))
 
     if report.missing:
-        logger.error(
-            "Flow feature mapping: %d/%d expected feature(s) MISSING (coverage=%.1f%%): %s",
+        logger.warning(
+            "Flow feature mapping: %d/%d expected feature(s) MISSING (coverage=%.1f%%), filling with 0.0: %s",
             len(report.missing),
             len(expected_features),
             (len(report.matched) / len(expected_features)) * 100 if expected_features else 0,
             report.missing,
-        )
-        raise ValueError(
-            f"Missing features in live flow data: {report.missing}. "
-            f"Cannot proceed with inference. Expected {len(expected_features)} features, "
-            f"got {len(report.matched)}. Missing: {report.missing}"
         )
 
     if report.dropped_unused:
@@ -92,14 +89,6 @@ def map_to_model_features(
             "Flow feature mapping: %d live-computed feature(s) not used by model: %s",
             len(report.dropped_unused),
             report.dropped_unused,
-        )
-
-    if report.missing:
-        logger.error(
-            "Flow feature mapping coverage: %.1f%% (%d/%d features present)",
-            len(report.matched) / len(expected_features) * 100,
-            len(report.matched),
-            len(expected_features),
         )
 
     return mapped, report

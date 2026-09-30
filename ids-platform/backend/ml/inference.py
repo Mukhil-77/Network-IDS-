@@ -30,6 +30,8 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+import numpy as np
+
 from backend.ml import confidence as confidence_mod
 from backend.ml import severity as severity_mod
 from backend.ml import validator
@@ -91,18 +93,23 @@ def predict(
     active_predictor = predictor if predictor is not None else get_predictor()
 
     try:
-        validator.validate_and_raise(features, active_predictor.expected_features)
+        validator.validate_and_raise(features, active_predictor.raw_feature_names)
     except validator.FeatureValidationError as exc:
         logger.warning("Prediction rejected: %d validation error(s)", len(exc.errors))
         raise FeatureValidationFailed(exc) from exc
 
     try:
-        X = validator.build_ordered_frame(features, active_predictor.expected_features)
-        X_transformed = active_predictor.transform(X)
+        X = validator.build_ordered_frame(features, active_predictor.raw_feature_names)
 
-        raw_prediction, confidence_pct = confidence_mod.compute_confidence(active_predictor.model, X_transformed)
+        # Predictor operates on raw features, applying scaler → PCA internally
+        raw_prediction = active_predictor.predict(X)
+        # Get confidence from predict_proba
+        probabilities = active_predictor.predict_proba(X)[0]
+        confidence_pct = float(np.max(probabilities)) * 100
         attack_label = active_predictor.decode_label(raw_prediction)
-        severity_level = severity_mod.get_severity(attack_label, severity_map)
+        # Use model's severity mapping if available (e.g., for LightGBM models)
+        model_severity_map = active_predictor.metadata.get('severity_mapping')
+        severity_level = severity_mod.get_severity(attack_label, model_severity_map or severity_map)
     except FeatureValidationFailed:
         raise
     except Exception as exc:  # noqa: BLE001 - deliberately broad: any pipeline failure becomes one clean error type

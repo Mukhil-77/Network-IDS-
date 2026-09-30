@@ -48,6 +48,16 @@ ATTACK_SEVERITY_MAP: Final[dict[str, str]] = {
     "Suspicious": "HIGH",
     "Trusted": "LOW",
     "Legitimate": "LOW",
+    # NF-UQ-NIDS-v2 labels (from LightGBM model)
+    "normal": "LOW",
+    "dos": "CRITICAL",
+    "port_scan": "MEDIUM",
+    "brute_force": "HIGH",
+    "web_attack": "HIGH",
+    "botnet": "CRITICAL",
+    "infiltration": "CRITICAL",
+    "anomaly": "HIGH",
+    "other": "MEDIUM",
 }
 
 # Severity to numeric score (0-1)

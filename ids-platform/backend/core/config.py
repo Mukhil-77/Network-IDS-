@@ -10,19 +10,23 @@ testable without an app context.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Resolve paths relative to the project root (directory containing this file's grandparent)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 class Settings(BaseSettings):
     # Where versioned model artifacts live - passed straight through to
     # backend.ml.predictor.get_predictor(models_dir=...).
-    MODEL_PATH: str = "models"
+    MODEL_PATH: str = str(PROJECT_ROOT / "models")
 
     # Where raw training CSVs live (the dataset POST /model/train trains on).
     # The same layout backend.ml.preprocessing.preprocess_dataset expects as
     # its CIC-IDS2017 input.
-    DATA_PATH: str = "data/raw"
+    DATA_PATH: str = str(PROJECT_ROOT / "data" / "raw")
 
     # Reported by GET / and GET /health, and used as the OpenAPI version.
     API_VERSION: str = "1.0.0"

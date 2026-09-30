@@ -108,6 +108,21 @@ export default function Settings() {
               <div className="mt-4 border-t border-border pt-3">
                 <p className="mb-2 text-xs text-slate-400">Choose scopes to delete (none selected = delete everything):</p>
                 <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={selectedScopes.length === CLEAR_SCOPE_LABELS.length}
+                      onChange={() => {
+                        if (selectedScopes.length === CLEAR_SCOPE_LABELS.length) {
+                          setSelectedScopes([]);
+                        } else {
+                          setSelectedScopes(CLEAR_SCOPE_LABELS.map(({ key }) => key));
+                        }
+                      }}
+                      className="accent-red-500"
+                    />
+                    Select All
+                  </label>
                   {CLEAR_SCOPE_LABELS.map(({ key, label }) => (
                     <label key={key} className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
                       <input
