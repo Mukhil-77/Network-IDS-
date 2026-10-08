@@ -7,6 +7,8 @@ export function useResponses(filters: ResponseFilters) {
     queryKey: ["responses", filters],
     queryFn: () => responsesService.list(filters),
     placeholderData: (previous) => previous,
+    staleTime: 30000,
+    gcTime: 300000,
   });
 }
 
@@ -14,6 +16,9 @@ export function useResponseHistory(limit = 20) {
   return useQuery({
     queryKey: ["responses", "history", limit],
     queryFn: () => responsesService.history(limit),
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -21,6 +26,9 @@ export function useResponseRules() {
   return useQuery({
     queryKey: ["response-rules"],
     queryFn: responsesService.getRules,
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -30,7 +38,7 @@ export function useExecuteResponse() {
     mutationFn: (request: ResponseExecuteRequest) => responsesService.execute(request),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["responses"] });
-      queryClient.invalidateQueries({ queryKey: ["alerts"] }); // alert.status changes too
+      queryClient.invalidateQueries({ queryKey: ["alerts"] });
     },
   });
 }

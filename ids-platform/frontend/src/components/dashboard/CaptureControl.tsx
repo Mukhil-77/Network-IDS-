@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { captureService, type CaptureInterface, type CaptureStatus } from "../../services/captureService";
+import { useCaptureStatus } from "../../hooks/useCaptureStatus";
+import { captureService, type CaptureInterface } from "../../services/captureService";
 
 const PROTOCOLS = [
   { value: "tcp", label: "TCP" },
@@ -10,8 +11,7 @@ const PROTOCOLS = [
 const ALL = "all";
 
 export function CaptureControl() {
-  const [status, setStatus] = useState<CaptureStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: status, isLoading, refetch } = useCaptureStatus();
   const [interfaces, setInterfaces] = useState<CaptureInterface[]>([]);
   const [selectedInterface, setSelectedInterface] = useState<string>("");
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>(["tcp", "udp"]);
@@ -25,30 +25,6 @@ export function CaptureControl() {
     return match?.description ?? name;
   };
 
-  const fetchStatus = async () => {
-    try {
-      const data = await captureService.status();
-      setStatus(data);
-    } catch (e) {
-      console.error("Failed to fetch capture status", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    captureService
-      .interfaces()
-      .then((list) => setInterfaces(list))
-      .catch(() => setInterfaces([]));
-  }, []);
-
   const toggleProtocol = (value: string) => {
     setSelectedProtocols((current) =>
       current.includes(value) ? current.filter((p) => p !== value) : [...current, value],
@@ -60,33 +36,29 @@ export function CaptureControl() {
   };
 
   const handleStart = async () => {
-    setLoading(true);
     setError(null);
     try {
       await captureService.start({
         interfaceName: selectedInterface || undefined,
         protocols: selectedProtocols,
       });
-      await fetchStatus();
+      await refetch();
     } catch (e) {
       console.error("Failed to start capture", e);
       setError("Failed to start capture. Check that you picked a valid adapter.");
-      setLoading(false);
     }
   };
 
   const handleStop = async () => {
-    setLoading(true);
     try {
       await captureService.stop();
-      await fetchStatus();
+      await refetch();
     } catch (e) {
       console.error("Failed to stop capture", e);
-      setLoading(false);
     }
   };
 
-  if (loading && !status) return <div className="p-4 bg-surface-raised rounded-xl animate-pulse h-24" />;
+  if (isLoading && !status) return <div className="p-4 bg-surface-raised rounded-xl animate-pulse h-24" />;
 
   return (
     <div className="rounded-xl border border-border bg-surface-raised p-4 flex flex-col justify-between h-full">
@@ -108,7 +80,7 @@ export function CaptureControl() {
             <p className="text-xs text-slate-400 mb-1">
               Protocols: <span className="font-mono text-slate-300">{status.protocols?.join(" + ") ?? "tcp + udp"}</span>
             </p>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 mb-1">
               Predictions:{" "}
               <span className="font-mono text-slate-300">{status.predictions_count}</span>
               {" · Avg latency: "}
@@ -177,7 +149,7 @@ export function CaptureControl() {
         {!status?.running ? (
           <button
             onClick={handleStart}
-            disabled={loading || selectedProtocols.length === 0}
+            disabled={selectedProtocols.length === 0}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 rounded transition-colors disabled:opacity-50"
           >
             Start Capture
@@ -185,7 +157,6 @@ export function CaptureControl() {
         ) : (
           <button
             onClick={handleStop}
-            disabled={loading}
             className="w-full bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-2 rounded transition-colors disabled:opacity-50"
           >
             Stop Capture

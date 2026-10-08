@@ -38,7 +38,7 @@ from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_MAX_STORED_ALERTS = 1000
+DEFAULT_MAX_STORED_ALERTS = 5000
 
 # See DetectionService.__init__'s on_alert_generated parameter.
 OnAlertGenerated = Callable[[Alert, Flow, PredictionResponse], None]
@@ -75,11 +75,19 @@ class DetectionService:
         # any existing caller that doesn't pass it.
         self.on_alert_generated = on_alert_generated
 
+    # Minimum packets in a flow to trigger classification (avoids noise from SYN scans, etc.)
+    MIN_FLOW_PACKETS = 3
+
     def handle_flow_closed(self, flow: Flow) -> None:
         """
         FlowManager's on_flow_closed callback. Submits classification to the
         executor and returns immediately - never blocks the calling thread.
         """
+        # Skip classification for flows with too few packets (likely noise)
+        if flow.packet_count < self.MIN_FLOW_PACKETS:
+            logger.debug("Skipping classification for flow %s: only %d packets (min=%d)", 
+                        flow.flow_id, flow.packet_count, self.MIN_FLOW_PACKETS)
+            return
         self._executor.submit(self._classify_and_store, flow)
 
     def _classify_and_store(self, flow: Flow) -> None:

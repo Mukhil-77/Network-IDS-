@@ -3,7 +3,13 @@ import { reportsService } from "../services/reportsService";
 import type { ReportGenerateRequest } from "../types/reports";
 
 export function useReportTypes() {
-  return useQuery({ queryKey: ["reports", "types"], queryFn: reportsService.list });
+  return useQuery({
+    queryKey: ["reports", "types"],
+    queryFn: reportsService.list,
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
+  });
 }
 
 export function useGenerateReport() {

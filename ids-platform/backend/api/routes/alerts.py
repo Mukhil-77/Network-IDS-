@@ -36,7 +36,7 @@ async def list_alerts(
     destination_ip: Optional[str] = Query(None),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=100.0),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=500),
+    page_size: int = Query(100, ge=1, le=1000),
     sort_by: str = Query("timestamp", pattern="^(timestamp|confidence|severity)$"),
     sort_desc: bool = Query(True),
 ) -> PaginatedAlertsResponse:
@@ -56,7 +56,7 @@ async def list_alerts(
 async def latest_alerts(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("alerts:read")),
-    limit: int = Query(20, ge=1, le=200),
+    limit: int = Query(100, ge=1, le=1000),
 ) -> list[AlertResponse]:
     rows = AlertRepository(db).get_latest(limit=limit)
     return [AlertResponse.model_validate(row) for row in rows]

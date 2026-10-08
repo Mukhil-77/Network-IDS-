@@ -77,7 +77,7 @@ async def recent_alerts(
 
 @router.get("/packets/recent", summary="Most recent packets seen by the capture pipeline (in-memory live feed)")
 async def recent_packets(
-    limit: int = 100,
+    limit: int = 500,
     user: User = Depends(get_current_user),
 ) -> list[Dict[str, Any]]:
     return capture_service.get_recent_packets(limit)

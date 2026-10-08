@@ -44,6 +44,7 @@ class ParsedPacket:
     header_length: int  # combined IP + transport header length, used by *_Header_Length features
     payload_length: int  # transport-layer payload size
     tcp_flags: frozenset[str]  # subset of {"SYN","ACK","FIN","RST","PSH","URG","ECE","CWR"}; empty for UDP/ICMP
+    tcp_window: int = 0  # TCP window size (0 for non-TCP)
     flow_id: str = ""  # Set by FlowManager when packet is added to a flow
 
 
@@ -80,18 +81,21 @@ def parse_packet(raw_packet: Packet) -> Optional[ParsedPacket]:
             tcp_flags = _extract_tcp_flags(transport)
             header_length = len(ip_layer) - len(transport.payload) if transport.payload else len(ip_layer)
             src_port, dst_port = int(transport.sport), int(transport.dport)
+            tcp_window = int(transport.window)
         elif UDP in raw_packet:
             transport = raw_packet[UDP]
             protocol = "UDP"
             tcp_flags = frozenset()
             header_length = len(ip_layer) - len(transport.payload) if transport.payload else len(ip_layer)
             src_port, dst_port = int(transport.sport), int(transport.dport)
+            tcp_window = 0
         elif ICMP in raw_packet:
             transport = raw_packet[ICMP]
             protocol = "ICMP"
             tcp_flags = frozenset()
             header_length = len(ip_layer) - len(transport.payload) if transport.payload else len(ip_layer)
             src_port, dst_port = 0, 0
+            tcp_window = 0
         else:
             return None  # not TCP/UDP/ICMP (e.g. ARP) - out of scope, matches CIC-IDS2017's coverage
 
@@ -108,6 +112,7 @@ def parse_packet(raw_packet: Packet) -> Optional[ParsedPacket]:
             header_length=int(header_length),
             payload_length=int(payload_length),
             tcp_flags=tcp_flags,
+            tcp_window=tcp_window,
         )
     except Exception:  # noqa: BLE001 - one malformed packet must never crash the capture loop
         logger.debug("Failed to parse packet; skipping", exc_info=True)

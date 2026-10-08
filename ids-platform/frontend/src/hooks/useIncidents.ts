@@ -7,6 +7,8 @@ export function useIncidents(filters: IncidentFilters) {
     queryKey: ["incidents", filters],
     queryFn: () => incidentsService.list(filters),
     placeholderData: (previous) => previous,
+    staleTime: 30000,
+    gcTime: 300000,
   });
 }
 

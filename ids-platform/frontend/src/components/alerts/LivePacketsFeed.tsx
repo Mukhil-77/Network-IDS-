@@ -4,7 +4,7 @@ import { packetsService } from "../../services/packetsService";
 import type { LivePacket } from "../../context/WebSocketContext";
 import type { LiveAlertPayload } from "../../types/websocket";
 
-const DISPLAY_LIMIT = 100;
+const DISPLAY_LIMIT = 500;
 
 function formatTime(iso: string): string {
   const date = new Date(iso);

@@ -18,7 +18,7 @@ from backend.websocket.events import WSEventType
 
 logger = get_logger(__name__)
 
-DEFAULT_MAX_STORED_PACKETS = 500
+DEFAULT_MAX_STORED_PACKETS = 2000
 
 
 def _packet_payload(pkt: ParsedPacket) -> dict:
@@ -39,7 +39,12 @@ def _packet_payload(pkt: ParsedPacket) -> dict:
 class CaptureService:
     def __init__(self) -> None:
         # Wire detection -> alert saving/broadcasting
-        self.detection_service = DetectionService(on_alert_generated=self._on_detection)
+        # Increase workers to handle ~600ms predictions at scale
+        self.detection_service = DetectionService(
+            on_alert_generated=self._on_detection,
+            max_workers=8,
+            max_stored_alerts=5000,
+        )
 
         self._recent_packets: deque[dict] = deque(maxlen=DEFAULT_MAX_STORED_PACKETS)
 
@@ -50,9 +55,13 @@ class CaptureService:
         self._session_predictions = 0
 
         # Wire flow closed -> detection, packet ingested -> live feed broadcast
+        # Also add periodic classification for long-lived flows (SSH, HTTP keep-alive, etc.)
         self.flow_manager = FlowManager(
             on_flow_closed=self.detection_service.handle_flow_closed,
             on_packet=self._handle_packet,
+            on_periodic_classify=self.detection_service.handle_flow_closed,
+            periodic_classify_interval_seconds=15.0,
+            periodic_classify_min_packets=10,
         )
 
         self.capture: Optional[PacketCapture] = None

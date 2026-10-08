@@ -10,6 +10,8 @@ export function useDeploymentMetrics() {
       return data;
     },
     refetchInterval: 30_000,
-    staleTime: 10_000,
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
   });
 }

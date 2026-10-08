@@ -5,7 +5,7 @@ import type { LivePacketPayload } from "../types/websocket";
 // the capture pipeline has seen (populated only while detection is running,
 // since it's driven by live capture).
 export const packetsService = {
-  getRecent: async (limit = 100): Promise<LivePacketPayload[]> => {
+  getRecent: async (limit = 500): Promise<LivePacketPayload[]> => {
     const { data } = await apiClient.get<LivePacketPayload[]>("/detection/packets/recent", { params: { limit } });
     return data;
   },

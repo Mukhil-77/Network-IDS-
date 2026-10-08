@@ -8,8 +8,12 @@ export function useCaptureStatus() {
     // Polled every 5s to keep the Avg Prediction Time card live without
     // hammering the API.
     refetchInterval: 5000,
-    // Don't show stale data while fetching - show loading state instead
-    placeholderData: undefined,
+    // Cache for 30 seconds to avoid refetching on every mount
+    staleTime: 30000,
+    // Keep in cache for 5 minutes after last subscriber unsubscribes
+    gcTime: 300000,
+    // Show stale data immediately while fetching in background
+    placeholderData: (previousData) => previousData,
   });
 }
 

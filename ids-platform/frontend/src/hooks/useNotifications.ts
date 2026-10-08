@@ -17,7 +17,9 @@ export function useNotificationRules() {
   return useQuery({
     queryKey: ["notifications", "rules"],
     queryFn: notificationsService.getRules,
-    placeholderData: (previous) => previous,
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -35,7 +37,9 @@ export function useNotificationSettings() {
   return useQuery({
     queryKey: ["notifications", "settings"],
     queryFn: notificationsService.getSettings,
-    placeholderData: (previous) => previous,
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
   });
 }
 

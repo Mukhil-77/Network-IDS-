@@ -32,7 +32,6 @@ from typing import Optional
 
 import numpy as np
 
-from backend.ml import confidence as confidence_mod
 from backend.ml import severity as severity_mod
 from backend.ml import validator
 from backend.ml.predictor import Predictor, get_predictor

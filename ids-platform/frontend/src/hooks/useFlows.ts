@@ -7,6 +7,8 @@ export function useFlows(filters: FlowFilters) {
     queryKey: ["flows", filters],
     queryFn: () => flowsService.list(filters),
     placeholderData: (previous) => previous,
+    staleTime: 30000,
+    gcTime: 300000,
   });
 }
 
@@ -14,6 +16,8 @@ export function useFlowSummary() {
   return useQuery({
     queryKey: ["flows", "summary"],
     queryFn: flowsService.summary,
-    placeholderData: (previous) => previous,
+    staleTime: 30000,
+    gcTime: 300000,
+    placeholderData: (previousData) => previousData,
   });
 }

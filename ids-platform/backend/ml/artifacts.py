@@ -46,12 +46,14 @@ logger = get_logger(__name__)
 # On-disk filenames - single source of truth so no other module hardcodes
 # a string like "scaler.pkl" and risks drifting from what's actually saved.
 # --------------------------------------------------------------------------
-MODEL_FILENAME: Final[str] = "rf_model.pkl"
+MODEL_FILENAME: Final[str] = "model.pkl"  # generic name; training scripts specify actual (rf_model.pkl, lgbm_model.pkl, etc.)
 SCALER_FILENAME: Final[str] = "scaler.pkl"
 PCA_FILENAME = "pca.pkl"
 ENCODER_FILENAME = "label_encoder.pkl"
 FEATURE_NAMES_FILENAME = "feature_names.json"
 METADATA_FILENAME = "metadata.json"
+IMPUTER_FILENAME = "imputer.pkl"
+CAT_ENCODERS_FILENAME = "cat_encoders.pkl"
 
 DEFAULT_MODELS_DIR = "models"
 
@@ -192,6 +194,42 @@ def load_encoder(version_dir: str | Path) -> LabelEncoder:
 
 
 # --------------------------------------------------------------------------
+# SimpleImputer (imputer.pkl)
+# --------------------------------------------------------------------------
+
+def save_imputer(imputer, version_dir: str | Path) -> Path:
+    path = Path(version_dir) / IMPUTER_FILENAME
+    joblib.dump(imputer, path)
+    logger.info("Saved imputer -> %s", path)
+    return path
+
+
+def load_imputer(version_dir: str | Path):
+    path = Path(version_dir) / IMPUTER_FILENAME
+    if not path.is_file():
+        raise ArtifactNotFoundError(f"Imputer file not found: {path}")
+    return joblib.load(path)
+
+
+# --------------------------------------------------------------------------
+# Categorical Encoders (cat_encoders.pkl)
+# --------------------------------------------------------------------------
+
+def save_cat_encoders(encoders: dict, version_dir: str | Path) -> Path:
+    path = Path(version_dir) / CAT_ENCODERS_FILENAME
+    joblib.dump(encoders, path)
+    logger.info("Saved categorical encoders -> %s", path)
+    return path
+
+
+def load_cat_encoders(version_dir: str | Path) -> dict:
+    path = Path(version_dir) / CAT_ENCODERS_FILENAME
+    if not path.is_file():
+        raise ArtifactNotFoundError(f"Categorical encoders file not found: {path}")
+    return joblib.load(path)
+
+
+# --------------------------------------------------------------------------
 # feature_names.json
 # --------------------------------------------------------------------------
 
@@ -275,36 +313,73 @@ def load_metadata(version_dir: str | Path) -> dict:
 def save_model_bundle(
     version_dir: str | Path,
     model: Any,
-    scaler: StandardScaler,
-    pca: IncrementalPCA,
+    scaler,
+    pca,
     feature_names: list[str],
     metadata: dict,
-    encoder: Optional[LabelEncoder] = None,
+    encoder = None,
+    imputer = None,
+    cat_encoders = None,
 ) -> None:
     """Save every artifact for a trained pipeline version in one call."""
     save_model(model, version_dir)
     save_scaler(scaler, version_dir)
-    save_pca(pca, version_dir)
+    if pca is not None:
+        save_pca(pca, version_dir)
     save_feature_names(feature_names, version_dir)
     save_metadata(metadata, version_dir)
     if encoder is not None:
         save_encoder(encoder, version_dir)
+    if imputer is not None:
+        save_imputer(imputer, version_dir)
+    if cat_encoders is not None:
+        save_cat_encoders(cat_encoders, version_dir)
     logger.info("Saved full model bundle -> %s", version_dir)
 
 
 def load_model_bundle(version_dir: str | Path) -> dict:
     """
-    Load every artifact for a model version in one call. `label_encoder` is
-    omitted from the result if no encoder.pkl exists for that version.
+    Load every artifact for a model version in one call. Optional artifacts
+    (pca, label_encoder, imputer, cat_encoders) are omitted if not present.
     """
+    # Try model.pkl first, then lgbm_model.pkl, then rf_model.pkl
+    model_path = Path(version_dir) / MODEL_FILENAME
+    if not model_path.is_file():
+        # Fallback to common model filenames
+        for fallback in ["lgbm_model.pkl", "rf_model.pkl"]:
+            fallback_path = Path(version_dir) / fallback
+            if fallback_path.is_file():
+                model_path = fallback_path
+                break
+    
+    if not model_path.is_file():
+        raise ArtifactNotFoundError(f"Model file not found in {version_dir} (tried model.pkl, lgbm_model.pkl, rf_model.pkl)")
+    
     bundle = {
-        "model": load_model(version_dir),
+        "model": joblib.load(model_path),
         "scaler": load_scaler(version_dir),
-        "pca": load_pca(version_dir),
         "feature_names": load_feature_names(version_dir),
         "metadata": load_metadata(version_dir),
     }
+    
+    # Optional PCA
+    pca_path = Path(version_dir) / PCA_FILENAME
+    if pca_path.is_file():
+        bundle["pca"] = load_pca(version_dir)
+    
+    # Optional label encoder
     encoder_path = Path(version_dir) / ENCODER_FILENAME
     if encoder_path.is_file():
         bundle["label_encoder"] = load_encoder(version_dir)
+    
+    # Optional imputer
+    imputer_path = Path(version_dir) / IMPUTER_FILENAME
+    if imputer_path.is_file():
+        bundle["imputer"] = load_imputer(version_dir)
+    
+    # Optional categorical encoders
+    cat_enc_path = Path(version_dir) / CAT_ENCODERS_FILENAME
+    if cat_enc_path.is_file():
+        bundle["cat_encoders"] = load_cat_encoders(version_dir)
+    
     return bundle

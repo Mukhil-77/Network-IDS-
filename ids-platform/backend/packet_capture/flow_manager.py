@@ -28,12 +28,13 @@ from backend.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Matches CICFlowMeter's default flow activity timeout (120s of inactivity closes a flow).
-DEFAULT_IDLE_TIMEOUT_SECONDS = 120.0
+# Reduced to 10s for more responsive real-time detection.
+DEFAULT_IDLE_TIMEOUT_SECONDS = 10.0
 # Safety valve so a long-lived connection (e.g. an idle SSH session) can't
-# hold a flow open forever and never get classified.
-DEFAULT_MAX_FLOW_DURATION_SECONDS = 600.0
+# hold a flow open forever and never get classified. Reduced to 60s.
+DEFAULT_MAX_FLOW_DURATION_SECONDS = 60.0
 # How often the background thread scans for flows to close.
-DEFAULT_TIMEOUT_CHECK_INTERVAL_SECONDS = 5.0
+DEFAULT_TIMEOUT_CHECK_INTERVAL_SECONDS = 2.0
 
 FlowKey = tuple[str, int, str, int, str]  # normalized, direction-agnostic
 
@@ -212,24 +213,51 @@ class FlowManager:
     is the intended subscriber, but FlowManager has no dependency on it.
     """
 
+    # Periodic classification for long-lived flows (e.g., SSH, HTTP keep-alive)
+DEFAULT_PERIODIC_CLASSIFY_INTERVAL_SECONDS = 15.0
+DEFAULT_PERIODIC_CLASSIFY_MIN_PACKETS = 10
+
+
+FlowClosedCallback = Callable[[Flow], None]
+PeriodicClassifyCallback = Callable[[Flow], None]
+
+
+class FlowManager:
+    """
+    Owns the live flow table. capture.py feeds it parsed packets via
+    `add_packet()`; a background thread closes idle/terminated/over-duration
+    flows and invokes `on_flow_closed` for each one - detection_service.py
+    is the intended subscriber, but FlowManager has no dependency on it.
+
+    Also supports periodic classification of long-lived flows via
+    `on_periodic_classify` callback.
+    """
+
     def __init__(
         self,
         on_flow_closed: Optional[FlowClosedCallback] = None,
         on_packet: Optional[PacketIngestedCallback] = None,
+        on_periodic_classify: Optional[PeriodicClassifyCallback] = None,
         idle_timeout_seconds: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
         max_flow_duration_seconds: float = DEFAULT_MAX_FLOW_DURATION_SECONDS,
         check_interval_seconds: float = DEFAULT_TIMEOUT_CHECK_INTERVAL_SECONDS,
+        periodic_classify_interval_seconds: float = DEFAULT_PERIODIC_CLASSIFY_INTERVAL_SECONDS,
+        periodic_classify_min_packets: int = DEFAULT_PERIODIC_CLASSIFY_MIN_PACKETS,
     ):
         self.on_flow_closed = on_flow_closed
         self.on_packet = on_packet
+        self.on_periodic_classify = on_periodic_classify
         self.idle_timeout_seconds = idle_timeout_seconds
         self.max_flow_duration_seconds = max_flow_duration_seconds
         self.check_interval_seconds = check_interval_seconds
+        self.periodic_classify_interval_seconds = periodic_classify_interval_seconds
+        self.periodic_classify_min_packets = periodic_classify_min_packets
 
         self._flows: dict[FlowKey, Flow] = {}
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._timeout_thread: Optional[threading.Thread] = None
+        self._last_periodic_classify: dict[FlowKey, float] = {}
 
     # ---------------------------------------------------------------- #
     # Packet ingestion
@@ -296,6 +324,34 @@ class FlowManager:
     def _timeout_loop(self) -> None:
         while not self._stop_event.wait(self.check_interval_seconds):
             self._reap_expired_flows()
+            self._periodic_classify_long_flows()
+
+    def _periodic_classify_long_flows(self) -> None:
+        """Trigger classification for long-lived flows that haven't closed yet."""
+        if self.on_periodic_classify is None:
+            return
+
+        now = time.time()
+        with self._lock:
+            for key, flow in self._flows.items():
+                # Check if enough packets have been seen
+                if flow.packet_count < self.periodic_classify_min_packets:
+                    continue
+
+                # Check if enough time has passed since last periodic classification
+                last_classify = self._last_periodic_classify.get(key, 0)
+                if now - last_classify < self.periodic_classify_interval_seconds:
+                    continue
+
+                # Mark as classified now (before callback to avoid re-entrancy)
+                self._last_periodic_classify[key] = now
+
+        # Call callback outside the lock to avoid blocking packet ingestion
+        if self.on_periodic_classify is not None:
+            try:
+                self.on_periodic_classify(flow)
+            except Exception:
+                logger.exception("Periodic classify callback raised for flow %s", flow.flow_id)
 
     def _reap_expired_flows(self) -> None:
         now = time.time()
@@ -318,6 +374,7 @@ class FlowManager:
         with self._lock:
             remaining = list(self._flows.values())
             self._flows.clear()
+            self._last_periodic_classify.clear()
         for flow in remaining:
             self._close(flow, reason="manager shutdown")
 

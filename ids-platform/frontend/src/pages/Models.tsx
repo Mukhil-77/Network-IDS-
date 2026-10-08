@@ -2,12 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { modelService } from "../services/modelService";
 
-const ALGORITHMS = [
-  { value: "random_forest", label: "Random Forest" },
-  { value: "decision_tree", label: "Decision Tree" },
-  { value: "knn", label: "K-Nearest Neighbors" },
-  { value: "logistic_regression", label: "Logistic Regression" },
-  { value: "svm", label: "SVM" },
+// Algorithm families - dynamically fetched from backend, fallback to lightgbm
+const DEFAULT_ALGORITHMS = [
+  { value: "lightgbm", label: "LightGBM (Gradient Boosting)" },
 ];
 
 export function Models() {
@@ -15,7 +12,7 @@ export function Models() {
   const [switching, setSwitching] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
 
-  const [algorithm, setAlgorithm] = useState(ALGORITHMS[0].value);
+  const [algorithm, setAlgorithm] = useState(DEFAULT_ALGORITHMS[0].value);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -137,7 +134,7 @@ export function Models() {
                 onChange={(e) => setAlgorithm(e.target.value)}
                 className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
               >
-                {ALGORITHMS.map((a) => (
+                {DEFAULT_ALGORITHMS.map((a) => (
                   <option key={a.value} value={a.value}>{a.label}</option>
                 ))}
               </select>
@@ -158,8 +155,8 @@ export function Models() {
                 Train All Families
               </button>
               <p className="text-xs text-gray-500">
-                Runs on the dataset at <code className="font-mono">DATA_PATH</code> and saves every fitted
-                variant as its own version. "Train All Families" trains every algorithm back-to-back.
+                Runs on the dataset at <code className="font-mono">DATA_PATH</code> and saves the fitted
+                model as a new version.
               </p>
             </div>
           )}
